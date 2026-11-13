@@ -142,7 +142,7 @@ func Find(wait time.Duration) ([]Board, error) {
 		if m.Unpack(buf[:n]) != nil || !m.Header.Response {
 			continue
 		}
-		logf("%.1fs answer from %s: %d records", time.Since(end.Add(-wait)).Seconds(), from, len(m.Answers)+len(m.Additionals))
+		logf("answer from %s: %d records", from, len(m.Answers)+len(m.Additionals))
 		if from.Port == 5353 {
 			responders[from.IP.String()] = &net.UDPAddr{IP: from.IP, Port: 5353}
 		}
