@@ -8,9 +8,10 @@ Depends: avahi-daemon, avahi-utils
 Maintainer: NapiLab <info@napilab.ru>
 Homepage: https://github.com/lab240/napi-avahi
 Description: Find NAPI boards on the LAN without knowing their IP
- Gives the board the mDNS name napi<SoC>-<MAC>.local (napi3308-b9df.local,
+ Gives the board the mDNS name napi<SoC>-<id>.local (napi3308-79df.local,
  napi3568-1c2e.local) and announces the service _napi._tcp with TXT records:
- model, SoC, OS, role, MAC, kernel. The name and the records are refreshed at
+ model, SoC, OS, role, MAC, chip serial, kernel. The id is 4 hex of the md5
+ of the chip serial: the MACs repeat between boards. The name and the records are refreshed at
  every boot; the system hostname is not changed.
  .
  Settings: /etc/napi/avahi.conf, or "napi-avahi role donoff,mgate" and

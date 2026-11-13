@@ -3,9 +3,13 @@
 //
 // It asks with "legacy unicast" mDNS queries (from an ordinary UDP port, not 5353), so it does not
 // fight the mDNS service of the system for the port: the answers come straight back to it.
+// Besides the multicast query it asks every address of its own subnets directly (port 5353):
+// some Wi-Fi access points do not pass multicast from the wired side to their clients, so a NAPI
+// on Wi-Fi never hears the multicast query, but avahi answers a unicast one.
 package napifind
 
 import (
+	"encoding/binary"
 	"errors"
 	"net"
 	"sort"
@@ -22,7 +26,7 @@ var mdnsAddr = &net.UDPAddr{IP: net.IPv4(224, 0, 0, 251), Port: 5353}
 
 // Board is one NAPI that answered.
 type Board struct {
-	Host string            // napi3308-b9df.local
+	Host string            // napi3308-79df.local
 	IP   []string          // IPv4
 	TXT  map[string]string // model, soc, os, role, mac, kernel
 }
@@ -39,6 +43,9 @@ func Find(wait time.Duration) ([]Board, error) {
 		return nil, err
 	}
 	defer conn.Close()
+	// The sweep sends ~254 packets at once to addresses without an ARP entry yet; they wait in the
+	// send buffer, and with the default one the queries after them stall.
+	conn.SetWriteBuffer(1 << 20)
 	pc := ipv4.NewPacketConn(conn)
 	ifs := interfaces()
 	if len(ifs) == 0 {
@@ -47,14 +54,31 @@ func Find(wait time.Duration) ([]Board, error) {
 
 	boards := map[string]*found{}  // by instance name
 	hosts := map[string][]string{} // host name -> IPv4
-	send := func(qs []dnsmessage.Question) {
-		b, err := (&dnsmessage.Message{Questions: qs}).Pack()
-		if err != nil {
+	sweep := subnetHosts(ifs)
+	responders := map[string]*net.UDPAddr{} // who answered: the follow-up questions go to them too
+	pack := func(qs []dnsmessage.Question) []byte {
+		b, _ := (&dnsmessage.Message{Questions: qs}).Pack()
+		return b
+	}
+	send := func(qs []dnsmessage.Question, round int) {
+		b := pack(qs)
+		if b == nil {
 			return
 		}
 		for i := range ifs {
 			if pc.SetMulticastInterface(&ifs[i]) == nil {
 				pc.WriteTo(b, nil, mdnsAddr)
+			}
+		}
+		for _, a := range responders {
+			conn.WriteToUDP(b, a)
+		}
+		if round < 2 { // the direct sweep: the first question only, twice
+			ptr := pack(qs[:1])
+			for _, a := range sweep {
+				if responders[a.IP.String()] == nil {
+					conn.WriteToUDP(ptr, a)
+				}
 			}
 		}
 	}
@@ -77,20 +101,25 @@ func Find(wait time.Duration) ([]Board, error) {
 
 	end := time.Now().Add(wait)
 	next := time.Now()
+	round := 0
 	buf := make([]byte, 9000)
 	for time.Now().Before(end) {
 		if !time.Now().Before(next) {
-			send(questions())
+			send(questions(), round)
+			round++
 			next = time.Now().Add(700 * time.Millisecond)
 		}
 		conn.SetReadDeadline(next)
-		n, _, err := conn.ReadFromUDP(buf)
+		n, from, err := conn.ReadFromUDP(buf)
 		if err != nil {
 			continue
 		}
 		var m dnsmessage.Message
 		if m.Unpack(buf[:n]) != nil || !m.Header.Response {
 			continue
+		}
+		if from.Port == 5353 {
+			responders[from.IP.String()] = &net.UDPAddr{IP: from.IP, Port: 5353}
 		}
 		for _, rr := range append(append(m.Answers, m.Authorities...), m.Additionals...) {
 			take(rr, boards, hosts)
@@ -157,6 +186,37 @@ func take(rr dnsmessage.Resource, boards map[string]*found, hosts map[string][]s
 
 func q(name string, t dnsmessage.Type) dnsmessage.Question {
 	return dnsmessage.Question{Name: dnsmessage.MustNewName(name), Type: t, Class: dnsmessage.ClassINET}
+}
+
+// All host addresses of the IPv4 subnets of the interfaces (/22 and smaller), without our own.
+func subnetHosts(ifs []net.Interface) []*net.UDPAddr {
+	var out []*net.UDPAddr
+	seen := map[string]bool{}
+	for _, i := range ifs {
+		addrs, _ := i.Addrs()
+		for _, a := range addrs {
+			n, ok := a.(*net.IPNet)
+			if !ok || n.IP.To4() == nil {
+				continue
+			}
+			ones, bits := n.Mask.Size()
+			if bits != 32 || ones < 22 || ones > 30 {
+				continue
+			}
+			own := n.IP.To4()
+			seen[own.String()] = true
+			base := binary.BigEndian.Uint32(own.Mask(n.Mask))
+			for h := uint32(1); h < 1<<(32-ones)-1; h++ {
+				ip := make(net.IP, 4)
+				binary.BigEndian.PutUint32(ip, base+h)
+				if !seen[ip.String()] {
+					seen[ip.String()] = true
+					out = append(out, &net.UDPAddr{IP: ip, Port: 5353})
+				}
+			}
+		}
+	}
+	return out
 }
 
 // Up, multicast, not loopback, with an IPv4 address.

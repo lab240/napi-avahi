@@ -1,6 +1,6 @@
 # napi-avahi: the board side is a shell script (Debian package, Architecture: all);
 # the finders for PCs are Go (make tools).
-VERSION = 0.1.0
+VERSION = 0.1.1
 DEB_VERSION ?= $(VERSION)
 DEB = build/napi-avahi_$(DEB_VERSION)_all.deb
 GO ?= go

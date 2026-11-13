@@ -20,7 +20,7 @@ configure)
 	systemctl enable napi-avahi.service >/dev/null 2>&1 || true
 	if [ -d /run/systemd/system ]; then
 		systemctl daemon-reload || true
-		/usr/bin/napi-avahi update || true
+		systemctl restart napi-avahi.service || true
 	fi
 	;;
 esac

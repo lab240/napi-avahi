@@ -1,12 +1,14 @@
 #!/bin/sh
 # napi-avahi: makes this NAPI findable on the LAN without knowing its IP (mDNS, avahi).
-#   name     napi<SoC>-<last 4 hex of MAC>.local, e.g. napi3308-b9df.local, napi3568-1c2e.local
-#   service  _napi._tcp (port 22) with TXT: model, soc, os, role, mac, kernel
+#   name     napi<SoC>-<id>.local, e.g. napi3308-4f1a.local; id = 4 hex of md5 of the chip serial
+#            (MACs and the serial tails repeat between boards: Armbian derives the MAC from part of
+#            the serial), the end of the MAC when there is no serial
+#   service  _napi._tcp (port 22) with TXT: model, soc, os, role, mac, serial, kernel
 # napi-finder.exe / napi-discover (Windows, Linux) and "napi-avahi list" show them all.
 #
 #   napi-avahi update               write the avahi name and the service, apply (the service runs it at boot)
 #   napi-avahi role donoff,mgate    set the role (empty: none) and update
-#   napi-avahi name kotelnaya       own name instead of napi<SoC>-<MAC> (empty: back to it) and update
+#   napi-avahi name kotelnaya       own name instead of napi<SoC>-<id> (empty: back to it) and update
 #   napi-avahi show                 what this board announces
 #   napi-avahi list                 all NAPI boards on the LAN
 #
@@ -57,12 +59,23 @@ os() {
 	fi
 }
 
+serial() { [ ! -r "$R/proc/device-tree/serial-number" ] || tr -d '\0' <"$R/proc/device-tree/serial-number"; }
+
+# 4 hex that differ between boards
+id() {
+	l_s=$(serial)
+	if [ -n "$l_s" ]; then
+		printf '%s' "$l_s" | md5sum | cut -c1-4
+	else
+		mac | tr -d ':' | tail -c 5
+	fi
+}
+
 kernel() { cat "$R/proc/sys/kernel/osrelease" 2>/dev/null || uname -r; }
 
 name() {
 	if [ -n "$NAME" ]; then echo "$NAME"; return; fi
-	l_m=$(mac | tr -d ':')
-	echo "napi$(soc)-$(echo "$l_m" | tail -c 5)"
+	echo "napi$(soc)-$(id)"
 }
 
 valid_name() { echo "$1" | grep -Eq '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'; }
@@ -77,6 +90,7 @@ show() {
 	echo "os=$(os)"
 	echo "role=$ROLE"
 	echo "mac=$(mac)"
+	echo "serial=$(serial)"
 	echo "kernel=$(kernel)"
 }
 

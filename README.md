@@ -2,9 +2,15 @@
 
 Найти NAPI в сети, не зная её IP.
 
-Пакет даёт плате mDNS-имя `napi<SoC>-<4 последних знака MAC>.local`, например
-`napi3308-b9df.local` (NAPI-C, RK3308) или `napi3568-1c2e.local` (NAPI2, RK3568),
-и объявляет службу `_napi._tcp` с полями TXT:
+Пакет даёт плате mDNS-имя `napi<SoC>-<id>.local`, например `napi3308-79df.local`
+(NAPI-C, RK3308) или `napi3568-1c2e.local` (NAPI2, RK3568), и объявляет службу `_napi._tcp`
+с полями TXT.
+
+`id`: 4 знака md5 от серийного номера чипа (`/proc/device-tree/serial-number`). MAC для этого
+не годится: Armbian выводит его из части серийника, и у разных плат он бывает одинаковым (как и
+конец серийника). Если серийника нет, берётся конец MAC.
+
+Поля TXT:
 
 | поле | пример |
 |------|--------|
@@ -13,6 +19,7 @@
 | `os` | `armbian-26.11.0-trunk.117`, `napilinux-1.4` |
 | `role` | `donoff,mgate` (задаёте вы) |
 | `mac` | `d2:a9:fd:81:b9:df` |
+| `serial` | `9e098bbcae8b6599` |
 | `kernel` | `6.18.62-current-rockchip64` |
 
 Имя и поля обновляются при каждой загрузке, до запуска avahi. Системный hostname не меняется.
@@ -30,7 +37,7 @@ apt update && apt install napi-avahi
 ```sh
 napi-avahi show                 # что объявляет эта плата
 napi-avahi role donoff,mgate    # роль (пусто: без роли)
-napi-avahi name kotelnaya       # своё имя вместо napi<SoC>-<MAC> (пусто: вернуть)
+napi-avahi name kotelnaya       # своё имя вместо napi<SoC>-<id> (пусто: вернуть)
 napi-avahi list                 # все NAPI в сети
 ```
 
@@ -44,10 +51,12 @@ napi-avahi list                 # все NAPI в сети
   для частной сети.
 - **Windows и Linux, консоль:** `napi-discover` (`-t 5s` слушать дольше).
 - **Linux:** `avahi-browse -rt _napi._tcp`.
-- Просто по имени: `ping -4 napi3308-b9df.local`, `http://napi3308-b9df.local:8090`.
+- Просто по имени: `ping -4 napi3308-79df.local`, `http://napi3308-79df.local:8090`.
 
 Утилиты спрашивают mDNS с обычного UDP-порта (legacy unicast), поэтому не мешают
-mDNS-службе Windows и работают без установки Bonjour.
+mDNS-службе Windows и работают без установки Bonjour. Кроме общего запроса (multicast) они
+спрашивают напрямую каждый адрес своей подсети: многие точки доступа Wi-Fi не пропускают
+multicast из проводной сети к своим клиентам, и NAPI на Wi-Fi общий запрос не слышит.
 
 ## Сборка
 
