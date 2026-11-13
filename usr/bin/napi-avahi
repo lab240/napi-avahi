@@ -27,13 +27,13 @@ NAME=
 
 # rockchip,rk3308 -> 3308; another SoC: the last word of the compatible list
 soc() {
-	l_c=$(tr '\0' '\n' <"$R/proc/device-tree/compatible" 2>/dev/null || true)
+	l_c=$( [ ! -r "$R/proc/device-tree/compatible" ] || tr '\0' '\n' <"$R/proc/device-tree/compatible")
 	l_s=$(echo "$l_c" | sed -n 's/^rockchip,rk\([0-9][0-9]*\)$/\1/p' | head -1)
 	[ -n "$l_s" ] || l_s=$(echo "$l_c" | tail -1 | sed 's/.*,//; s/[^a-z0-9]//g')
 	echo "$l_s"
 }
 
-model() { tr -d '\0' <"$R/proc/device-tree/model" 2>/dev/null | sed 's/ *$//' || true; }
+model() { [ ! -r "$R/proc/device-tree/model" ] || tr -d '\0' <"$R/proc/device-tree/model" | sed 's/ *$//'; }
 
 # The board's own Ethernet: end0 or eth0, else the first one with a device behind it.
 iface() {

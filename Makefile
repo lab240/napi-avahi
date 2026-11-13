@@ -9,7 +9,7 @@ all: test deb
 
 test:
 	sh -n usr/bin/napi-avahi
-	for f in packaging/deb/postinst packaging/deb/prerm packaging/deb/postrm; do sh -n $$f; done
+	for f in packaging/deb/postinst packaging/deb/prerm packaging/deb/postrm install.sh uninstall.sh; do sh -n $$f; done
 	sh tests/test.sh
 
 deb:
@@ -26,6 +26,15 @@ deb:
 	    packaging/deb/control.in > build/deb/DEBIAN/control
 	dpkg-deb --root-owner-group --build build/deb $(DEB)
 
+# For NapiLinux without the recipe: build/napi-avahi-<version>.tar.gz with install.sh / uninstall.sh
+TAR = napi-avahi-$(DEB_VERSION)
+tar:
+	rm -rf build/$(TAR) build/$(TAR).tar.gz
+	mkdir -p build/$(TAR)
+	cp -r --parents usr/bin/napi-avahi lib/systemd/system/napi-avahi.service etc/napi/avahi.conf \
+	    install.sh uninstall.sh README.md LICENSE build/$(TAR)/
+	tar -C build --owner=0 --group=0 -czf build/$(TAR).tar.gz $(TAR)
+
 # For Yocto and manual installs; the deb target lays out the same files.
 DESTDIR ?=
 BINDIR ?= /usr/bin
@@ -37,15 +46,17 @@ install:
 	install -D -m 644 etc/napi/avahi.conf $(DESTDIR)$(SYSCONFDIR)/napi/avahi.conf
 
 # napi-finder.exe (Windows: window, --console; the icon, version and manifest from tools/mkres),
-# napi-discover (Linux console)
+# napi-finder for Linux (the page in the browser, --console, --serial), napi-discover (Linux console)
 tools:
 	mkdir -p build
 	$(GO) run ./tools/mkres -ico assets/napi.ico -version $(DEB_VERSION) -o cmd/napi-finder/rsrc_windows_amd64.syso
 	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 $(GO) build -ldflags "-s -w -X main.version=$(DEB_VERSION)" -o build/napi-finder.exe ./cmd/napi-finder
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build -ldflags "-s -w -X main.version=$(DEB_VERSION)" -o build/napi-finder-linux-amd64 ./cmd/napi-finder
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build -ldflags "-s -w -X main.version=$(DEB_VERSION)" -o build/napi-finder-linux-arm64 ./cmd/napi-finder
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build -ldflags "-s -w" -o build/napi-discover-linux-amd64 ./cmd/napi-discover
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build -ldflags "-s -w" -o build/napi-discover-linux-arm64 ./cmd/napi-discover
 
 clean:
 	rm -rf build
 
-.PHONY: all test deb install tools clean
+.PHONY: all test deb install tar tools clean

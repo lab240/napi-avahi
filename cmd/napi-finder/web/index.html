@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Поиск NAPI в сети</title>
+<link rel="icon" href="napi.svg" type="image/svg+xml">
+<style>
+:root {
+  --bg: #f3f3f3; --panel: #ffffff; --text: #1f1f1f; --muted: #666; --line: #dcdcdc;
+  --btn: #fdfdfd; --btn-h: #e8f0e0; --accent: #438104; --sel: #dbe9cc; --sel-text: #1f1f1f;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #1e1f1c; --panel: #262824; --text: #e6e6e1; --muted: #a0a29a; --line: #3b3d37;
+    --btn: #2e302b; --btn-h: #384330; --accent: #7cc23a; --sel: #3c4d2a; --sel-text: #f1f5ea; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.35 system-ui, "Segoe UI", Cantarell, Ubuntu, sans-serif; }
+header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 12px 6px; }
+header img { width: 22px; height: 18px; margin-right: 2px; }
+button { font: inherit; color: var(--text); background: var(--btn); border: 1px solid var(--line); border-radius: 5px;
+  padding: 5px 12px; cursor: pointer; }
+button:hover:not(:disabled) { background: var(--btn-h); border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: default; }
+button.main { border-color: var(--accent); }
+.sep { width: 8px; }
+.drop { position: relative; }
+.menu { position: absolute; top: calc(100% + 3px); left: 0; z-index: 5; min-width: 260px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,.18); padding: 4px; display: none; }
+.menu.open { display: block; }
+.menu div { padding: 6px 10px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+.menu div:hover { background: var(--btn-h); }
+.menu .off { color: var(--muted); cursor: default; white-space: normal; }
+.menu .off:hover { background: none; }
+.menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
+.menu .on::before { content: "✓ "; color: var(--accent); }
+.menu small { color: var(--muted); margin-left: 8px; }
+#bar { display: flex; align-items: center; gap: 10px; padding: 2px 12px 8px; min-height: 26px; color: var(--muted); }
+#prog { width: 180px; height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; display: none; }
+#prog > div { height: 100%; width: 0; background: var(--accent); transition: width .15s; }
+.busy #prog { display: block; }
+main { padding: 0 12px 12px; }
+.wrap { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; overflow: auto; }
+table { border-collapse: collapse; width: 100%; min-width: 980px; }
+th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { font-weight: 600; position: sticky; top: 0; background: var(--panel); }
+tbody tr { cursor: default; }
+tbody tr.sel { background: var(--sel); color: var(--sel-text); }
+td.empty { color: var(--muted); text-align: center; padding: 30px; white-space: normal; }
+#log { display: none; margin-top: 8px; max-height: 220px; overflow: auto; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 6px; padding: 8px; font: 12px/1.4 ui-monospace, "DejaVu Sans Mono", monospace; white-space: pre; }
+#log.open { display: block; }
+dialog { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); max-width: 620px; padding: 18px 20px; }
+dialog::backdrop { background: rgba(0,0,0,.35); }
+dialog h2 { margin: 0 0 10px; font-size: 17px; display: flex; gap: 10px; align-items: center; }
+dialog h2 img { width: 30px; }
+dialog p { margin: 8px 0; }
+dialog code { background: var(--bg); padding: 1px 5px; border-radius: 3px; }
+dialog a { color: var(--accent); }
+dialog .foot { color: var(--muted); font-size: 12.5px; border-top: 1px solid var(--line); padding-top: 10px; margin-top: 12px; }
+dialog form { text-align: right; margin-top: 10px; }
+</style>
+</head>
+<body>
+<header>
+  <img src="napi.svg" alt="">
+  <button id="find" class="main">Искать</button>
+  <button id="raw">Сырой поиск</button>
+  <span class="drop"><button id="con">Консоль ▾</button><div class="menu" id="conMenu"></div></span>
+  <span class="sep"></span>
+  <button class="b" data-port="8080">napiconfig</button>
+  <button class="b" id="ssh">SSH</button>
+  <button class="b" data-port="8086">influxdb</button>
+  <button class="b" data-port="3000">grafana</button>
+  <button class="b" data-port="8090">donoff</button>
+  <span class="sep"></span>
+  <button id="logBtn" disabled>Журнал</button>
+  <button id="helpBtn">Help</button>
+</header>
+<div id="bar"><div id="prog"><div></div></div><span id="status">Нажмите «Искать» (платы с napi-avahi) или «Сырой поиск» (всё, что отвечает на порту 22).</span></div>
+<main>
+  <div class="wrap"><table>
+    <thead><tr><th>Имя</th><th>IP</th><th>Модель</th><th>SoC</th><th>ОС</th><th>Роль</th><th>MAC</th><th>Признаки</th></tr></thead>
+    <tbody id="rows"><tr><td class="empty" colspan="8">Плат пока нет</td></tr></tbody>
+  </table></div>
+  <div id="log"></div>
+</main>
+
+<dialog id="help">
+  <h2><img src="napi.svg" alt=""> napi-finder <span id="ver"></span></h2>
+  <p>Поиск плат NAPI в сети, SSH и консоль UART.</p>
+  <p>«Искать»: платы с сервисом napi-avahi. «Сырой поиск»: всё, что отвечает на порту 22, с признаками NAPI (для плат без napi-avahi).
+    «Консоль»: UART платы через USB-переходник, 1500000 8N1, выход Ctrl+]. napiconfig, SSH, influxdb, grafana, donoff: выбранная в таблице плата.</p>
+  <p>Чтобы плата находилась кнопкой «Искать», на ней должен стоять сервис napi-avahi: <code>apt install napi-avahi</code>
+    из репозитория napilab: <a href="https://repo.napilab.ru" target="_blank">repo.napilab.ru</a>.
+    Исходники и подключение репозитория: <a href="https://github.com/lab240/napi-avahi" target="_blank">github.com/lab240/napi-avahi</a>.</p>
+  <p id="termInfo"></p>
+  <div class="foot">© 2026 napilab (lab240). Свободная программа под <a href="https://github.com/lab240/napi-avahi/blob/main/LICENSE" target="_blank">лицензией MIT</a>:
+    её можно использовать, копировать, изменять и распространять, в том числе в коммерческих целях, если сохранено это уведомление.
+    Программа предоставляется «как есть», без каких-либо гарантий. Авторы не несут ответственности за любые последствия её использования,
+    в том числе за ущерб, потерю данных и сбои оборудования.</div>
+  <form method="dialog"><button class="main">OK</button></form>
+</dialog>
+
+<script>
+const $ = s => document.querySelector(s);
+const api = (p, post) => fetch("api/" + p, post ? { method: "POST" } : {}).then(async r => {
+  if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
+  return r.headers.get("content-type")?.includes("json") ? r.json() : null;
+});
+let first = true, rows = [], sel = -1, baud = 1500000, busy = false, tick = 0, lastRaw = false, hadSearch = false;
+
+function status(s) { $("#status").textContent = s; }
+
+function render() {
+  const tb = $("#rows");
+  tb.replaceChildren();
+  if (!rows.length) {
+    const tr = tb.insertRow(), td = tr.insertCell();
+    td.colSpan = 8; td.className = "empty";
+    td.textContent = hadSearch ? (lastRaw ? "Никто не ответил на порту 22."
+      : "NAPI не найдены. На платах нужен сервис napi-avahi (apt install napi-avahi, см. Help); платы без него найдёт «Сырой поиск».")
+      : "Плат пока нет";
+  }
+  rows.forEach((r, i) => {
+    const tr = tb.insertRow();
+    for (const v of [r.Name, r.IP, r.Model, r.SoC, r.OS, r.Role, r.MAC, r.Signs]) tr.insertCell().textContent = v || "";
+    if (i === sel) tr.className = "sel";
+    tr.onclick = () => { sel = i; render(); };
+    tr.ondblclick = () => { navigator.clipboard?.writeText(ip(r)).then(() => status("Скопировано: " + ip(r))); };
+  });
+  buttons();
+}
+
+function ip(r) { return (r.IP || "").split(",")[0].trim(); }
+
+function buttons() {
+  const on = !busy && sel >= 0;
+  document.querySelectorAll("button.b").forEach(b => b.disabled = !on);
+  $("#find").disabled = $("#raw").disabled = busy;
+  $("#logBtn").disabled = busy || !hadSearch;
+}
+
+async function search(raw) {
+  try { await api("search?raw=" + (raw ? 1 : 0), true); } catch (e) { status(e.message); return; }
+  busy = true; lastRaw = raw; buttons(); document.body.classList.add("busy"); poll();
+}
+
+async function poll() {
+  let s;
+  try { s = await api("state"); } catch (e) { status("Нет связи с napi-finder: " + e.message); setTimeout(poll, 1000); return; }
+  tick++;
+  const dots = ["", ".", "..", "..."][Math.floor(tick / 2) % 4];
+  if (s.busy) {
+    if (!busy) { busy = true; lastRaw = s.raw; buttons(); document.body.classList.add("busy"); }
+    first = false;
+    let pos;
+    if (s.raw && s.total) {
+      pos = s.done < s.total ? s.done * 90 / s.total : 90 + Math.min(s.since / 200, 9.9);
+      status(`Сырой поиск: проверяю порт 22 по всей подсети${dots}  ${s.done} из ${s.total}`);
+    } else {
+      pos = Math.min(s.since / 30, 100);
+      status((s.raw ? "Сырой поиск" : "Ищу NAPI (napi-avahi)") + dots);
+    }
+    $("#prog > div").style.width = pos + "%";
+    setTimeout(poll, 150);
+    return;
+  }
+  if (busy || (first && (s.rows?.length || s.log))) { // the search is over, or the page was reloaded after one
+    busy = false; hadSearch = true; lastRaw = s.raw; document.body.classList.remove("busy");
+    rows = s.rows || []; sel = rows.length ? 0 : -1;
+    $("#log").textContent = s.log || "";
+    render();
+    if (s.err) status("Ошибка: " + s.err);
+    else if (!rows.length) status(lastRaw ? "Никто не ответил на порту 22." : "NAPI не найдены.");
+    else status(lastRaw ? `На порту 22: ${rows.length}. «NAPI?»: Linux с признаками NAPI, но без napi-avahi.`
+      : `Найдено: ${rows.length}. Выберите строку и нажмите кнопку службы; двойной щелчок копирует IP.`);
+  }
+  first = false;
+  setTimeout(poll, 3000); // keep-alive: napi-finder exits when the page is closed
+}
+
+$("#find").onclick = () => search(false);
+$("#raw").onclick = () => search(true);
+document.querySelectorAll("button[data-port]").forEach(b => b.onclick = () => {
+  if (sel < 0) return;
+  const url = `http://${ip(rows[sel])}:${b.dataset.port}`;
+  window.open(url, "_blank"); status("Открываю " + url);
+});
+$("#ssh").onclick = async () => {
+  if (sel < 0) return;
+  try { await api("ssh?ip=" + encodeURIComponent(ip(rows[sel])), true); status("SSH: " + ip(rows[sel])); }
+  catch (e) { status("SSH: " + e.message); }
+};
+$("#logBtn").onclick = () => $("#log").classList.toggle("open");
+$("#helpBtn").onclick = () => $("#help").showModal();
+
+// The console menu: the ports now, the speed.
+$("#con").onclick = async e => {
+  e.stopPropagation();
+  const m = $("#conMenu");
+  if (m.classList.contains("open")) { m.classList.remove("open"); return; }
+  let p = { ports: [], dialout: true };
+  try { p = await api("ports"); } catch (err) { status(err.message); }
+  m.replaceChildren();
+  const add = (cls, text, small, fn) => {
+    const d = document.createElement("div"); d.className = cls; d.textContent = text;
+    if (small) { const s = document.createElement("small"); s.textContent = small; d.append(s); }
+    if (fn) d.onclick = fn; m.append(d);
+  };
+  if (!p.ports.length) add("off", "COM-портов нет: подключите USB-UART");
+  for (const port of p.ports) add("", port.name, port.desc, async () => {
+    m.classList.remove("open");
+    try { await api(`serial?port=${encodeURIComponent(port.name)}&baud=${baud}`, true); status(`Консоль ${port.name} ${baud}. Выход из неё: Ctrl+]`); }
+    catch (err) { status("Консоль: " + err.message); }
+  });
+  if (!p.dialout) add("off", "Нет доступа к портам: sudo usermod -aG dialout $USER, затем перезайдите");
+  m.append(document.createElement("hr"));
+  for (const b of [1500000, 115200]) add(b === baud ? "on" : "", "Скорость " + b, "", () => { baud = b; m.classList.remove("open"); status("Скорость консоли: " + b); });
+  m.classList.add("open");
+};
+document.addEventListener("click", () => $("#conMenu").classList.remove("open"));
+
+api("info").then(i => {
+  $("#ver").textContent = i.version;
+  $("#termInfo").textContent = i.terminal ? "SSH и консоль открываются в терминале " + i.terminal + "."
+    : "Терминал не найден: SSH и консоль не откроются (поставьте xterm или другой терминал).";
+}).catch(() => {});
+// The --app window of a running Chrome keeps the size of the profile: set ours, centered, within the screen.
+if (window.outerHeight > 640 || window.outerWidth < 1000) {
+  const w = Math.min(1320, screen.availWidth), h = Math.min(580, screen.availHeight);
+  try { window.resizeTo(w, h); window.moveTo((screen.availWidth - w) / 2 + (screen.availLeft || 0), (screen.availHeight - h) / 3 + (screen.availTop || 0)); } catch (e) {}
+}
+buttons();
+poll();
+</script>
+</body>
+</html>

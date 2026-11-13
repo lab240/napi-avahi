@@ -39,6 +39,18 @@ apt update && apt install napi-avahi
 скрипт, включает `napi-avahi.service`, `/etc/napi/avahi.conf` помечен как `CONFFILES`.
 Скрипт проверен на busybox. Перед релизом закрепить `SRCREV`.
 
+### NapiLinux без рецепта (старые образы)
+
+Архив `napi-avahi-<версия>.tar.gz` (`make tar`): скопировать на плату и под root
+
+```sh
+tar xzf napi-avahi-0.1.2.tar.gz && cd napi-avahi-0.1.2 && sh install.sh
+```
+
+В образе должен быть `avahi-daemon` (`avahi-utils` желателен: без него новое имя применяется
+перезапуском avahi и не работает `napi-avahi list`). Существующий `/etc/napi/avahi.conf`
+сохраняется. Удаление: `sh uninstall.sh` (`--purge` удаляет и настройки).
+
 ## Команды на плате
 
 ```sh
@@ -66,6 +78,12 @@ napi-avahi list                 # все NAPI в сети
   все адреса своей подсети с открытым портом 22 и признаки NAPI. Вердикт: `NAPI` (есть
   napi-avahi), `NAPI?` (Linux плюс признаки: локальный MAC, как у Armbian, имя с napi,
   порты 8080/8090/8086/3000/1883), `Linux`, `не NAPI` (MikroTik, Windows).
+- **Linux, окно:** один файл `napi-finder-linux-amd64` (или `-arm64`), без Qt/GTK и других библиотек.
+  Запуск без аргументов открывает страницу на 127.0.0.1 в браузере (отдельным окном, если есть
+  Chrome/Chromium) с теми же кнопками, что в Windows. SSH и консоль UART открываются в терминале
+  (gnome-terminal, konsole, xfce4-terminal, xterm...; или `$TERMINAL`). Для UART пользователь должен
+  быть в группе `dialout`. Программа выходит сама, когда страницу закрыли. Ещё: `--console`,
+  `--serial /dev/ttyUSB0 [--baud 115200]`.
 - **Linux, консоль:** `napi-discover` (`-v`, `-t 5s`, `--raw`).
 - **Linux:** `avahi-browse -rt _napi._tcp`.
 - Просто по имени: `ping -4 napi3308-79df.local`, `http://napi3308-79df.local:8090`.
@@ -80,7 +98,7 @@ multicast из проводной сети к своим клиентам, и NA
 ```sh
 make test        # тесты скрипта на поддельной плате
 make deb         # build/napi-avahi_<версия>_all.deb
-make tools       # build/napi-finder.exe, napi-discover-linux-{amd64,arm64}
+make tools       # build/napi-finder.exe, napi-finder-linux-{amd64,arm64}, napi-discover-linux-{amd64,arm64}
 ```
 
 Пакет для repo.napilab.ru собирает `build-napi-avahi.sh` из

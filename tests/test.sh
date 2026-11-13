@@ -61,4 +61,27 @@ rm "$T/etc/napilinux-release"
 echo 'PRETTY_NAME="Napi Linux 0.3.2"' >"$T/etc/os-release"
 check napilinux-os-release "os=napilinux-0.3.2" "$(sh $A show | grep '^os=')"
 
+# install.sh / uninstall.sh (the archive for NapiLinux) into an empty root
+I=$(pwd)/build/test-install
+rm -rf build/test-install
+mkdir -p "$I/proc/device-tree" "$I/sys/class/net/eth0" "$I/etc/avahi" "$I/lib/systemd/system"
+printf 'napilab,napi2\0rockchip,rk3568\0' >"$I/proc/device-tree/compatible"
+printf 'b8d0bb10ae8b6599\0' >"$I/proc/device-tree/serial-number"
+echo 5a:11:22:33:1c:2e >"$I/sys/class/net/eth0/address"
+echo 'PRETTY_NAME="Napi Linux 0.3.2"' >"$I/etc/os-release"
+printf '[server]\nuse-ipv4=yes\n' >"$I/etc/avahi/avahi-daemon.conf"
+NAPI_AVAHI_ROOT="$I" sh install.sh
+check install-unit-lib 1 "$(ls "$I/lib/systemd/system/napi-avahi.service" 2>/dev/null | wc -l)"
+check install-host-name "host-name=napi3568-$(printf b8d0bb10ae8b6599 | md5sum | cut -c1-4)" "$(grep '^host-name=' "$I/etc/avahi/avahi-daemon.conf")"
+check install-os 1 "$(grep -c '<txt-record>os=napilinux-0.3.2</txt-record>' "$I/etc/avahi/services/napi.service")"
+echo ROLE=mgate >"$I/etc/napi/avahi.conf"
+NAPI_AVAHI_ROOT="$I" sh install.sh
+check install-keeps-conf "ROLE=mgate" "$(cat "$I/etc/napi/avahi.conf")"
+NAPI_AVAHI_ROOT="$I" sh uninstall.sh
+check uninstall-files 0 "$(ls "$I/usr/bin/napi-avahi" "$I/lib/systemd/system/napi-avahi.service" "$I/etc/avahi/services/napi.service" 2>/dev/null | wc -l)"
+check uninstall-host-name 0 "$(grep -c '^host-name=' "$I/etc/avahi/avahi-daemon.conf")"
+check uninstall-keeps-conf "ROLE=mgate" "$(cat "$I/etc/napi/avahi.conf")"
+NAPI_AVAHI_ROOT="$I" sh uninstall.sh --purge
+check purge 0 "$(ls "$I/etc/napi/avahi.conf" 2>/dev/null | wc -l)"
+
 exit $fail
