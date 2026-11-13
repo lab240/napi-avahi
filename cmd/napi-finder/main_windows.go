@@ -1,11 +1,19 @@
 // napi-finder: a small Windows window that finds the NAPI boards on the LAN.
 // Button "Искать", a table (name, IP, model, SoC, OS, role, MAC); double click copies the IP,
-// napiconfig / influxdb / grafana / donoff open http://<IP>:<port> of the selected board. Plain Win32, no libraries.
+// napiconfig / influxdb / grafana / donoff open http://<IP>:<port> of the selected board; "Журнал"
+// shows what the last search did. Plain Win32, no libraries.
 //
-//	GOOS=windows go build -ldflags -H=windowsgui -o napi-finder.exe ./cmd/napi-finder
+//	napi-finder.exe                     the window
+//	napi-finder.exe --console [-v] [-t 5s]   the table in the console (-v: the log)
+//
+// Built as a console program (GOOS=windows go build -o napi-finder.exe ./cmd/napi-finder), so the
+// console mode prints into the terminal it was started from and the terminal waits for it. Started
+// with a double click it owns a console of its own: it hides and drops it and opens the window.
 package main
 
 import (
+	"fmt"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -13,6 +21,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/lab240/napi-avahi/internal/cli"
 	"github.com/lab240/napi-avahi/internal/napifind"
 )
 
@@ -23,34 +32,38 @@ var (
 	comctl32 = syscall.NewLazyDLL("comctl32.dll")
 	shell32  = syscall.NewLazyDLL("shell32.dll")
 
-	pRegisterClassEx    = user32.NewProc("RegisterClassExW")
-	pCreateWindowEx     = user32.NewProc("CreateWindowExW")
-	pDefWindowProc      = user32.NewProc("DefWindowProcW")
-	pGetMessage         = user32.NewProc("GetMessageW")
-	pTranslateMessage   = user32.NewProc("TranslateMessage")
-	pDispatchMessage    = user32.NewProc("DispatchMessageW")
-	pPostQuitMessage    = user32.NewProc("PostQuitMessage")
-	pPostMessage        = user32.NewProc("PostMessageW")
-	pSendMessage        = user32.NewProc("SendMessageW")
-	pMoveWindow         = user32.NewProc("MoveWindow")
-	pLoadCursor         = user32.NewProc("LoadCursorW")
-	pLoadIcon           = user32.NewProc("LoadIconW")
-	pSetWindowText      = user32.NewProc("SetWindowTextW")
-	pEnableWindow       = user32.NewProc("EnableWindow")
-	pIsDialogMessage    = user32.NewProc("IsDialogMessageW")
-	pOpenClipboard      = user32.NewProc("OpenClipboard")
-	pEmptyClipboard     = user32.NewProc("EmptyClipboard")
-	pSetClipboardData   = user32.NewProc("SetClipboardData")
-	pCloseClipboard     = user32.NewProc("CloseClipboard")
-	pGetDpiForWindow    = user32.NewProc("GetDpiForWindow")
-	pSetProcessDPIAware = user32.NewProc("SetProcessDPIAware")
-	pGetModuleHandle    = kernel32.NewProc("GetModuleHandleW")
-	pGlobalAlloc        = kernel32.NewProc("GlobalAlloc")
-	pGlobalLock         = kernel32.NewProc("GlobalLock")
-	pGlobalUnlock       = kernel32.NewProc("GlobalUnlock")
-	pCreateFont         = gdi32.NewProc("CreateFontW")
-	pInitCommonCtrls    = comctl32.NewProc("InitCommonControlsEx")
-	pShellExecute       = shell32.NewProc("ShellExecuteW")
+	pRegisterClassEx       = user32.NewProc("RegisterClassExW")
+	pCreateWindowEx        = user32.NewProc("CreateWindowExW")
+	pDefWindowProc         = user32.NewProc("DefWindowProcW")
+	pGetMessage            = user32.NewProc("GetMessageW")
+	pTranslateMessage      = user32.NewProc("TranslateMessage")
+	pDispatchMessage       = user32.NewProc("DispatchMessageW")
+	pPostQuitMessage       = user32.NewProc("PostQuitMessage")
+	pPostMessage           = user32.NewProc("PostMessageW")
+	pSendMessage           = user32.NewProc("SendMessageW")
+	pMoveWindow            = user32.NewProc("MoveWindow")
+	pLoadCursor            = user32.NewProc("LoadCursorW")
+	pLoadIcon              = user32.NewProc("LoadIconW")
+	pSetWindowText         = user32.NewProc("SetWindowTextW")
+	pEnableWindow          = user32.NewProc("EnableWindow")
+	pShowWindow            = user32.NewProc("ShowWindow")
+	pIsDialogMessage       = user32.NewProc("IsDialogMessageW")
+	pOpenClipboard         = user32.NewProc("OpenClipboard")
+	pEmptyClipboard        = user32.NewProc("EmptyClipboard")
+	pSetClipboardData      = user32.NewProc("SetClipboardData")
+	pCloseClipboard        = user32.NewProc("CloseClipboard")
+	pGetDpiForWindow       = user32.NewProc("GetDpiForWindow")
+	pSetProcessDPIAware    = user32.NewProc("SetProcessDPIAware")
+	pGetConsoleWindow      = kernel32.NewProc("GetConsoleWindow")
+	pGetConsoleProcessList = kernel32.NewProc("GetConsoleProcessList")
+	pFreeConsole           = kernel32.NewProc("FreeConsole")
+	pGetModuleHandle       = kernel32.NewProc("GetModuleHandleW")
+	pGlobalAlloc           = kernel32.NewProc("GlobalAlloc")
+	pGlobalLock            = kernel32.NewProc("GlobalLock")
+	pGlobalUnlock          = kernel32.NewProc("GlobalUnlock")
+	pCreateFont            = gdi32.NewProc("CreateFontW")
+	pInitCommonCtrls       = comctl32.NewProc("InitCommonControlsEx")
+	pShellExecute          = shell32.NewProc("ShellExecuteW")
 )
 
 const (
@@ -89,6 +102,7 @@ const (
 	idFind = 101
 	idWeb  = 110 // + index in webs
 	idList = 103
+	idLog  = 104 // the "Журнал" button
 )
 
 type wndClassEx struct {
@@ -149,12 +163,14 @@ type nmhdr struct {
 }
 
 var (
-	hwndMain, hwndFind, hwndStatus, hwndList uintptr
-	hwndWeb                                  []uintptr
-	boards                                   []napifind.Board
-	result                                   chan []napifind.Board
-	findErr                                  error
-	dpi                                      = 96
+	hwndMain, hwndFind, hwndStatus, hwndList, hwndLogBtn, hwndLog uintptr
+	logShown                                                      bool
+	logText                                                       string
+	hwndWeb                                                       []uintptr
+	boards                                                        []napifind.Board
+	result                                                        chan []napifind.Board
+	findErr                                                       error
+	dpi                                                           = 96
 )
 
 func u16(s string) *uint16 { p, _ := syscall.UTF16PtrFromString(s); return p }
@@ -167,6 +183,31 @@ func send(h uintptr, m uint32, w, l uintptr) uintptr {
 func px(v int) int { return v * dpi / 96 }
 
 func main() {
+	if len(os.Args) > 1 {
+		code := cli.Run("napi-finder", os.Args[1:])
+		if ownConsole() { // started from Explorer with arguments (a shortcut): keep the output readable
+			fmt.Print("\nНажмите Enter...")
+			fmt.Scanln()
+		}
+		os.Exit(code)
+	}
+	if ownConsole() {
+		if h, _, _ := pGetConsoleWindow.Call(); h != 0 {
+			pShowWindow.Call(h, 0) // SW_HIDE
+		}
+		pFreeConsole.Call()
+	}
+	window()
+}
+
+// Only this process is attached to its console: it was started by a double click, not from a terminal.
+func ownConsole() bool {
+	var ids [4]uint32
+	n, _, _ := pGetConsoleProcessList.Call(uintptr(unsafe.Pointer(&ids[0])), 4)
+	return n == 1
+}
+
+func window() {
 	runtime.LockOSThread()
 	pSetProcessDPIAware.Call()
 	icc := [2]uint32{8, 0x1} // ICC_LISTVIEW_CLASSES
@@ -202,7 +243,13 @@ func main() {
 	for i, w := range webs {
 		hwndWeb = append(hwndWeb, child("BUTTON", w.name, wsTabStop, idWeb+i))
 	}
+	hwndLogBtn = child("BUTTON", "Журнал", wsTabStop, idLog)
 	hwndStatus = child("STATIC", "", 0, 0)
+	// The log of the last search: interfaces, the direct sweep, every answer.
+	hwndLog, _, _ = pCreateWindowEx.Call(wsExClientEdge, uintptr(unsafe.Pointer(u16("EDIT"))), 0,
+		wsChild|0x4|0x40|0x800|0x00200000, 0, 0, 10, 10, hwndMain, 0, inst, 0) // ES_MULTILINE|ES_AUTOVSCROLL|ES_READONLY|WS_VSCROLL
+	mono, _, _ := pCreateFont.Call(uintptr(-px(13)), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, uintptr(unsafe.Pointer(u16("Consolas"))))
+	send(hwndLog, wmSetFont, mono, 1)
 	hwndList, _, _ = pCreateWindowEx.Call(wsExClientEdge, uintptr(unsafe.Pointer(u16("SysListView32"))), 0,
 		wsChild|wsVisible|wsTabStop|lvsReport|lvsSingleSel|lvsShowSelAlways, 0, 0, 10, 10, hwndMain, idList, inst, 0)
 	send(hwndList, wmSetFont, font, 1)
@@ -240,10 +287,28 @@ func layout() {
 	for i, hb := range hwndWeb {
 		pMoveWindow.Call(hb, uintptr(m+(i+1)*(bw+m)), uintptr(m), uintptr(bw), uintptr(bh), 1)
 	}
+	pMoveWindow.Call(hwndLogBtn, uintptr(m+(len(hwndWeb)+1)*(bw+m)+m), uintptr(m), uintptr(bw), uintptr(bh), 1)
 	sh := px(22)
 	pMoveWindow.Call(hwndStatus, uintptr(m), uintptr(m+bh+px(8)), uintptr(max(w-2*m, 10)), uintptr(sh), 1)
 	top := m + bh + px(8) + sh
-	pMoveWindow.Call(hwndList, uintptr(m), uintptr(top), uintptr(max(w-2*m, 10)), uintptr(max(h-top-m, 10)), 1)
+	rest := max(h-top-m, 20)
+	if logShown {
+		lh := rest * 2 / 5
+		pMoveWindow.Call(hwndList, uintptr(m), uintptr(top), uintptr(max(w-2*m, 10)), uintptr(rest-lh-px(6)), 1)
+		pMoveWindow.Call(hwndLog, uintptr(m), uintptr(top+rest-lh), uintptr(max(w-2*m, 10)), uintptr(lh), 1)
+	} else {
+		pMoveWindow.Call(hwndList, uintptr(m), uintptr(top), uintptr(max(w-2*m, 10)), uintptr(rest), 1)
+	}
+}
+
+func toggleLog() {
+	logShown = !logShown
+	sw := 0
+	if logShown {
+		sw = 5 // SW_SHOW
+	}
+	pShowWindow.Call(hwndLog, uintptr(sw))
+	layout()
 }
 
 func status(s string) { pSetWindowText.Call(hwndStatus, uintptr(unsafe.Pointer(u16(s)))) }
@@ -254,7 +319,21 @@ func find() {
 	status("Ищу...")
 	result = make(chan []napifind.Board, 1)
 	go func(ch chan []napifind.Board) {
+		var lg strings.Builder
+		t0 := time.Now()
+		napifind.Log = func(f string, a ...any) {
+			fmt.Fprintf(&lg, "%5.2fs  "+f+"\r\n", append([]any{time.Since(t0).Seconds()}, a...)...)
+		}
 		list, err := napifind.Find(3 * time.Second)
+		napifind.Log = nil
+		fmt.Fprintf(&lg, "найдено: %d\r\n", len(list))
+		for _, b := range list {
+			fmt.Fprintf(&lg, "  %s %s\r\n", b.Host, strings.Join(b.IP, ","))
+		}
+		if err != nil {
+			fmt.Fprintf(&lg, "ошибка: %v\r\n", err)
+		}
+		logText = lg.String()
 		findErr = err
 		ch <- list
 		pPostMessage.Call(hwndMain, wmApp, 0, 0)
@@ -263,6 +342,7 @@ func find() {
 
 func show(list []napifind.Board) {
 	boards = list
+	pSetWindowText.Call(hwndLog, uintptr(unsafe.Pointer(u16(logText))))
 	send(hwndList, lvmDeleteAll, 0, 0)
 	for i, b := range list {
 		t := b.TXT
@@ -355,6 +435,8 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 		switch wp & 0xffff {
 		case idFind:
 			find()
+		case idLog:
+			toggleLog()
 		default:
 			if i := int(wp&0xffff) - idWeb; i >= 0 && i < len(webs) {
 				open(i)

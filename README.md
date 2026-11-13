@@ -45,11 +45,12 @@ napi-avahi list                 # все NAPI в сети
 
 ## Поиск с компьютера
 
-- **Windows, окно:** `napi-finder.exe`. Кнопка «Искать», таблица NAPI; кнопки
+- **Windows:** один файл `napi-finder.exe`. Двойной щелчок: окно с кнопкой «Искать» и таблицей NAPI; кнопки
   napiconfig (8080), influxdb (8086), grafana (3000), donoff (8090) открывают выбранную плату
   в браузере, двойной щелчок копирует IP. Если Windows спросит про брандмауэр, разрешите
-  для частной сети.
-- **Windows и Linux, консоль:** `napi-discover` (`-t 5s` слушать дольше).
+  для частной сети. «Журнал» показывает, что делал последний поиск.
+  В консоли: `.\napi-finder.exe --console` (`-v` журнал, `-t 5s` слушать дольше).
+- **Linux, консоль:** `napi-discover` (`-v`, `-t 5s`).
 - **Linux:** `avahi-browse -rt _napi._tcp`.
 - Просто по имени: `ping -4 napi3308-79df.local`, `http://napi3308-79df.local:8090`.
 
@@ -63,7 +64,7 @@ multicast из проводной сети к своим клиентам, и NA
 ```sh
 make test        # тесты скрипта на поддельной плате
 make deb         # build/napi-avahi_<версия>_all.deb
-make tools       # build/napi-finder.exe, napi-discover(.exe), napi-discover-linux-{amd64,arm64}
+make tools       # build/napi-finder.exe, napi-discover-linux-{amd64,arm64}
 ```
 
 Пакет для repo.napilab.ru собирает `build-napi-avahi.sh` из

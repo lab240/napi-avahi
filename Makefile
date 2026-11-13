@@ -25,11 +25,10 @@ deb:
 	    packaging/deb/control.in > build/deb/DEBIAN/control
 	dpkg-deb --root-owner-group --build build/deb $(DEB)
 
-# napi-finder.exe (window), napi-discover for Windows and Linux (console)
+# napi-finder.exe (Windows: window, --console), napi-discover (Linux console)
 tools:
 	mkdir -p build
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 $(GO) build -ldflags "-H=windowsgui -s -w" -o build/napi-finder.exe ./cmd/napi-finder
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 $(GO) build -ldflags "-s -w" -o build/napi-discover.exe ./cmd/napi-discover
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 $(GO) build -ldflags "-s -w" -o build/napi-finder.exe ./cmd/napi-finder
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build -ldflags "-s -w" -o build/napi-discover-linux-amd64 ./cmd/napi-discover
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build -ldflags "-s -w" -o build/napi-discover-linux-arm64 ./cmd/napi-discover
 
