@@ -8,12 +8,14 @@
 <style>
 :root {
   --bg: #f3f3f3; --panel: #ffffff; --text: #1f1f1f; --muted: #666; --line: #dcdcdc;
-  --btn: #fdfdfd; --btn-h: #e8f0e0; --accent: #438104; --sel: #dbe9cc; --sel-text: #1f1f1f;
+  --btn: #fdfdfd; --btn-h: #e8f0e0; --accent: #438104; --sel: #c9dfb2; --sel-text: #1f1f1f;
+  --avahi: #e8f3de; --raw: #fdf3d0;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
   :root { --bg: #1e1f1c; --panel: #262824; --text: #e6e6e1; --muted: #a0a29a; --line: #3b3d37;
-    --btn: #2e302b; --btn-h: #384330; --accent: #7cc23a; --sel: #3c4d2a; --sel-text: #f1f5ea; }
+    --btn: #2e302b; --btn-h: #384330; --accent: #7cc23a; --sel: #4a6330; --sel-text: #f1f5ea;
+    --avahi: #2c3826; --raw: #3d3622; }
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.35 system-ui, "Segoe UI", Cantarell, Ubuntu, sans-serif; }
@@ -46,7 +48,9 @@ table { border-collapse: collapse; width: 100%; min-width: 980px; }
 th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 th { font-weight: 600; position: sticky; top: 0; background: var(--panel); }
 tbody tr { cursor: default; }
-tbody tr.sel { background: var(--sel); color: var(--sel-text); }
+tbody tr.avahi { background: var(--avahi); }
+tbody tr.raw { background: var(--raw); }
+tbody tr.sel { background: var(--sel); color: var(--sel-text); box-shadow: inset 3px 0 0 var(--accent); }
 td.empty { color: var(--muted); text-align: center; padding: 30px; white-space: normal; }
 #log { display: none; margin-top: 8px; max-height: 220px; overflow: auto; background: var(--panel); border: 1px solid var(--line);
   border-radius: 6px; padding: 8px; font: 12px/1.4 ui-monospace, "DejaVu Sans Mono", monospace; white-space: pre; }
@@ -91,7 +95,8 @@ dialog form { text-align: right; margin-top: 10px; }
   <h2><img src="napi.svg" alt=""> napi-finder <span id="ver"></span></h2>
   <p>Поиск плат NAPI в сети, SSH и консоль UART.</p>
   <p>«Искать»: платы с сервисом napi-avahi. «Сырой поиск»: всё, что отвечает на порту 22, с признаками NAPI (для плат без napi-avahi).
-    «Консоль»: UART платы через USB-переходник, 1500000 8N1, выход Ctrl+]. napiconfig, SSH, influxdb, grafana, donoff: выбранная в таблице плата.</p>
+    «Консоль»: UART платы через USB-переходник, 1500000 8N1, выход Ctrl+]. napiconfig, SSH, influxdb, grafana, donoff: выбранная в таблице плата;
+    двойной щелчок по строке: SSH, Ctrl+C: копировать IP. Зелёные строки найдены через napi-avahi, жёлтые: «NAPI?» сырого поиска.</p>
   <p>Чтобы плата находилась кнопкой «Искать», на ней должен стоять сервис napi-avahi: <code>apt install napi-avahi</code>
     из репозитория napilab: <a href="https://repo.napilab.ru" target="_blank">repo.napilab.ru</a>.
     Исходники и подключение репозитория: <a href="https://github.com/lab240/napi-avahi" target="_blank">github.com/lab240/napi-avahi</a>.
@@ -127,9 +132,9 @@ function render() {
   rows.forEach((r, i) => {
     const tr = tb.insertRow();
     for (const v of [r.Name, r.IP, r.Model, r.SoC, r.OS, r.Role, r.MAC, r.Signs]) tr.insertCell().textContent = v || "";
-    if (i === sel) tr.className = "sel";
+    tr.className = (r.Kind || "") + (i === sel ? " sel" : "");
     tr.onclick = () => { sel = i; render(); };
-    tr.ondblclick = () => { navigator.clipboard?.writeText(ip(r)).then(() => status("Скопировано: " + ip(r))); };
+    tr.ondblclick = () => { sel = i; render(); $("#ssh").click(); };
   });
   buttons();
 }
@@ -176,7 +181,7 @@ async function poll() {
     if (s.err) status("Ошибка: " + s.err);
     else if (!rows.length) status(lastRaw ? "Никто не ответил на порту 22." : "NAPI не найдены.");
     else status(lastRaw ? `На порту 22: ${rows.length}. «NAPI?»: Linux с признаками NAPI, но без napi-avahi.`
-      : `Найдено: ${rows.length}. Выберите строку и нажмите кнопку службы; двойной щелчок копирует IP.`);
+      : `Найдено: ${rows.length}. Двойной щелчок: SSH; Ctrl+C копирует IP.`);
   }
   first = false;
   setTimeout(poll, 3000); // keep-alive: napi-finder exits when the page is closed
@@ -194,6 +199,13 @@ $("#ssh").onclick = async () => {
   try { await api("ssh?ip=" + encodeURIComponent(ip(rows[sel])), true); status("SSH: " + ip(rows[sel])); }
   catch (e) { status("SSH: " + e.message); }
 };
+// Ctrl+C on a selected row (no text selected): its IP.
+document.addEventListener("keydown", e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c" && sel >= 0 && !String(getSelection())) {
+    navigator.clipboard?.writeText(ip(rows[sel])).then(() => status("Скопировано: " + ip(rows[sel])));
+    e.preventDefault();
+  }
+});
 $("#logBtn").onclick = () => $("#log").classList.toggle("open");
 $("#helpBtn").onclick = () => $("#help").showModal();
 

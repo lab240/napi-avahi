@@ -3,11 +3,12 @@ package napifind
 // The raw search, for boards without napi-avahi: every address of the own subnets on TCP 22
 // (but the default gateway and the DNS servers), and for those that answer the signs of a NAPI.
 //
-//   ssh   the banner: OpenSSH on Ubuntu/Debian (Armbian), dropbear (Yocto) is Linux;
+//   ssh   the banner: OpenSSH on Ubuntu/Debian (Armbian), bare OpenSSH_x.y or dropbear (Yocto) is Linux;
 //         ROSSSH (MikroTik), OpenSSH_for_Windows are not NAPI
 //   mac   locally administered (Armbian derives it from the chip serial: d2:..., 06:..., 6a:...)
 //   name  the mDNS name by the IP (any avahi answers it, even without napi-avahi)
-//   ports the NAPI web pages and MQTT: 8080 napiconfig, 8090 donoff, 8086 influxdb, 3000 grafana, 1883
+//   ports the NAPI web pages and MQTT: 8080 napiconfig (shown by name), 8090 donoff, 8086 influxdb,
+//         3000 grafana, 1883
 //   napi-avahi: the ordinary search runs alongside and marks the boards it found
 
 import (
@@ -169,6 +170,9 @@ func judge(h *Host) {
 	linux := strings.Contains(s, "ubuntu") || strings.Contains(s, "debian") || strings.Contains(s, "dropbear") ||
 		strings.Contains(s, "armbian") || strings.Contains(s, "raspbian")
 	notNapi := strings.Contains(s, "rosssh") || strings.Contains(s, "windows") || strings.Contains(s, "cisco")
+	// Yocto (NapiLinux) builds OpenSSH without a distribution suffix: "OpenSSH_9.6".
+	linux = linux || (!notNapi && strings.HasPrefix(s, "openssh_") && !strings.Contains(s, " "))
+	napiName := strings.Contains(strings.ToLower(h.Name), "napi")
 	if h.Board != nil {
 		h.Signs = append(h.Signs, "napi-avahi")
 	}
@@ -178,18 +182,22 @@ func judge(h *Host) {
 	if la := localMAC(h.MAC); la {
 		h.Signs = append(h.Signs, "mac")
 	}
-	if strings.Contains(strings.ToLower(h.Name), "napi") {
+	if napiName {
 		h.Signs = append(h.Signs, "имя")
 	}
 	for _, p := range h.Ports {
-		h.Signs = append(h.Signs, fmt.Sprint(":", p))
+		if p == 8080 { // 22 and 8080: napiconfig, the web setup of NAPI
+			h.Signs = append(h.Signs, "napiconfig")
+		} else {
+			h.Signs = append(h.Signs, fmt.Sprint(":", p))
+		}
 	}
 	switch {
 	case h.Board != nil:
 		h.Verdict = "NAPI"
 	case notNapi:
 		h.Verdict = "не NAPI"
-	case linux && len(h.Signs) > 1:
+	case napiName, linux && len(h.Signs) > 1:
 		h.Verdict = "NAPI?"
 	case linux:
 		h.Verdict = "Linux"

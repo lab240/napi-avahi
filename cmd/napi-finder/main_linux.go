@@ -54,6 +54,7 @@ func main() {
 // One line of the table.
 type row struct {
 	Name, IP, Model, SoC, OS, Role, MAC, Signs string
+	Kind                                       string // the row colour: "avahi", "raw" (NAPI? of the raw search), ""
 }
 
 // The search state the page polls.
@@ -229,6 +230,9 @@ func search(raw bool) bool {
 				r := row{Name: h.Name, IP: h.IP, OS: h.SSH, MAC: h.MAC, Signs: h.Verdict}
 				if b := h.Board; b != nil {
 					r.Model, r.SoC, r.OS, r.Role = b.TXT["model"], b.TXT["soc"], b.TXT["os"], b.TXT["role"]
+					r.Kind = "avahi"
+				} else if h.Verdict == "NAPI?" {
+					r.Kind = "raw"
 				}
 				if len(h.Signs) > 0 {
 					r.Signs += ": " + strings.Join(h.Signs, " ")
@@ -241,7 +245,7 @@ func search(raw bool) bool {
 			for _, b := range list {
 				t := b.TXT
 				rows = append(rows, row{Name: b.Host, IP: strings.Join(b.IP, ", "), Model: t["model"], SoC: t["soc"],
-					OS: t["os"], Role: t["role"], MAC: t["mac"], Signs: "napi-avahi"})
+					OS: t["os"], Role: t["role"], MAC: t["mac"], Signs: "napi-avahi", Kind: "avahi"})
 			}
 		}
 		napifind.Log = nil

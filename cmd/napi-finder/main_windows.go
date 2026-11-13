@@ -77,6 +77,7 @@ var (
 	pInitCommonCtrls       = comctl32.NewProc("InitCommonControlsEx")
 	pShellExecute          = shell32.NewProc("ShellExecuteW")
 	pSetTimer              = user32.NewProc("SetTimer")
+	pGetKeyState           = user32.NewProc("GetKeyState")
 	pKillTimer             = user32.NewProc("KillTimer")
 )
 
@@ -115,7 +116,9 @@ const (
 	lvcfText         = 0x0004
 	lvifText         = 0x0001
 	lvniSelected     = 0x0002
-	nmDblClk         = ^uint32(2) // NM_DBLCLK = -3
+	nmDblClk         = ^uint32(2)   // NM_DBLCLK = -3
+	nmCustomDraw     = ^uint32(11)  // NM_CUSTOMDRAW = -12
+	lvnKeyDown       = ^uint32(154) // LVN_KEYDOWN = -155
 
 	idFind  = 101
 	idWeb   = 110 // + index in webs
@@ -190,7 +193,16 @@ type nmhdr struct {
 type row struct {
 	ip    string
 	cells []string
+	kind  int // the row colour: kindAvahi, kindRaw (NAPI? of the raw search), 0
 }
+
+const (
+	kindAvahi = 1
+	kindRaw   = 2
+)
+
+// Row backgrounds (COLORREF 0x00BBGGRR): napi-avahi light green, NAPI? of the raw search light amber.
+var kindColor = map[int]uint32{kindAvahi: 0x00DEF3E8, kindRaw: 0x00D0F3FD}
 
 var (
 	hwndSSH, hwndCOM, hwndAbout uintptr
@@ -431,7 +443,13 @@ func find(raw bool) {
 				if len(h.Signs) > 0 {
 					signs += ": " + strings.Join(h.Signs, " ")
 				}
-				out = append(out, row{h.IP, []string{name, h.IP, model, soc, osn, role, h.MAC, signs}})
+				kind := 0
+				if h.Board != nil {
+					kind = kindAvahi
+				} else if h.Verdict == "NAPI?" {
+					kind = kindRaw
+				}
+				out = append(out, row{h.IP, []string{name, h.IP, model, soc, osn, role, h.MAC, signs}, kind})
 			}
 		} else {
 			var list []napifind.Board
@@ -442,7 +460,7 @@ func find(raw bool) {
 				if len(b.IP) > 0 {
 					ip = b.IP[0]
 				}
-				out = append(out, row{ip, []string{b.Host, strings.Join(b.IP, ", "), t["model"], t["soc"], t["os"], t["role"], t["mac"], "napi-avahi"}})
+				out = append(out, row{ip, []string{b.Host, strings.Join(b.IP, ", "), t["model"], t["soc"], t["os"], t["role"], t["mac"], "napi-avahi"}, kindAvahi})
 			}
 		}
 		napifind.Log = nil
@@ -555,9 +573,27 @@ func show(list []row) {
 		if rawSearch {
 			status("На порту 22: " + strconv.Itoa(len(list)) + ". «NAPI?»: Linux с признаками NAPI, но без napi-avahi.")
 		} else {
-			status("Найдено: " + strconv.Itoa(len(list)) + ". Выберите строку и нажмите кнопку службы; двойной щелчок копирует IP.")
+			status("Найдено: " + strconv.Itoa(len(list)) + ". Двойной щелчок: SSH; Ctrl+C копирует IP.")
 		}
 	}
+}
+
+// NM_CUSTOMDRAW of the list: the background of a row by its kind. NMLVCUSTOMDRAW on amd64:
+// NMHDR (24), dwDrawStage at 24, dwItemSpec at 56, clrText at 80, clrTextBk at 84.
+func rowColor(lp uintptr) uintptr {
+	switch *(*uint32)(unsafe.Pointer(lp + 24)) {
+	case 0x1: // CDDS_PREPAINT
+		return 0x20 // CDRF_NOTIFYITEMDRAW
+	case 0x10001: // CDDS_ITEMPREPAINT
+		i := int(*(*uintptr)(unsafe.Pointer(lp + 56)))
+		if i >= 0 && i < len(rows) {
+			if c, ok := kindColor[rows[i].kind]; ok {
+				*(*uint32)(unsafe.Pointer(lp + 84)) = c
+				return 0x2 // CDRF_NEWFONT: use the colours
+			}
+		}
+	}
+	return 0
 }
 
 func selected() *row {
@@ -660,7 +696,7 @@ func serialOpen(p comPort) {
 // The help: TaskDialog (common controls 6, from the manifest) with links that open in the browser.
 const helpText = `Поиск плат NAPI в сети, SSH и консоль UART.
 
-«Искать»: платы с сервисом napi-avahi. «Сырой поиск»: всё, что отвечает на порту 22, с признаками NAPI (для плат без napi-avahi). «Консоль»: UART платы через USB-переходник, 1500000 8N1, выход Ctrl+]. napiconfig, SSH, influxdb, grafana, donoff: выбранная в таблице плата.
+«Искать»: платы с сервисом napi-avahi. «Сырой поиск»: всё, что отвечает на порту 22, с признаками NAPI (для плат без napi-avahi). «Консоль»: UART платы через USB-переходник, 1500000 8N1, выход Ctrl+]. napiconfig, SSH, influxdb, grafana, donoff: выбранная в таблице плата; двойной щелчок по строке: SSH, Ctrl+C: копировать IP. Зелёные строки найдены через napi-avahi, жёлтые: «NAPI?» сырого поиска.
 
 Чтобы плата находилась кнопкой «Искать», на ней должен стоять сервис napi-avahi:
     apt install napi-avahi
@@ -777,10 +813,23 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 		return 0
 	case wmNotify:
 		h := (*nmhdr)(unsafe.Pointer(lp))
-		if h.id == idList && h.code == nmDblClk {
-			if b := selected(); b != nil && copyText(b.ip) {
-				status("Скопировано: " + b.ip)
+		if h.id != idList {
+			return 0
+		}
+		switch h.code {
+		case nmDblClk:
+			if selected() != nil {
+				sshOpen()
 			}
+		case lvnKeyDown: // NMLVKEYDOWN: wVKey after the header
+			key := *(*uint16)(unsafe.Pointer(lp + unsafe.Sizeof(nmhdr{})))
+			if ctrl, _, _ := pGetKeyState.Call(0x11); key == 'C' && int16(ctrl) < 0 {
+				if b := selected(); b != nil && copyText(b.ip) {
+					status("Скопировано: " + b.ip)
+				}
+			}
+		case nmCustomDraw:
+			return rowColor(lp)
 		}
 		return 0
 	case wmDestroy:
