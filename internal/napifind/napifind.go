@@ -37,6 +37,15 @@ type found struct {
 }
 
 // Find listens for the given time and returns the boards sorted by name.
+// Log, when set, gets what the search does (napi-discover -v).
+var Log func(format string, a ...any)
+
+func logf(format string, a ...any) {
+	if Log != nil {
+		Log(format, a...)
+	}
+}
+
 func Find(wait time.Duration) ([]Board, error) {
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{})
 	if err != nil {
@@ -55,6 +64,11 @@ func Find(wait time.Duration) ([]Board, error) {
 	boards := map[string]*found{}  // by instance name
 	hosts := map[string][]string{} // host name -> IPv4
 	sweep := subnetHosts(ifs)
+	for _, i := range ifs {
+		addrs, _ := i.Addrs()
+		logf("interface %q: %v", i.Name, addrs)
+	}
+	logf("direct sweep: %d addresses", len(sweep))
 	responders := map[string]*net.UDPAddr{} // who answered: the follow-up questions go to them too
 	pack := func(qs []dnsmessage.Question) []byte {
 		b, _ := (&dnsmessage.Message{Questions: qs}).Pack()
@@ -66,8 +80,10 @@ func Find(wait time.Duration) ([]Board, error) {
 			return
 		}
 		for i := range ifs {
-			if pc.SetMulticastInterface(&ifs[i]) == nil {
-				pc.WriteTo(b, nil, mdnsAddr)
+			if err := pc.SetMulticastInterface(&ifs[i]); err != nil {
+				logf("multicast interface %q: %v", ifs[i].Name, err)
+			} else if _, err := pc.WriteTo(b, nil, mdnsAddr); err != nil {
+				logf("multicast send on %q: %v", ifs[i].Name, err)
 			}
 		}
 		for _, a := range responders {
@@ -75,10 +91,18 @@ func Find(wait time.Duration) ([]Board, error) {
 		}
 		if round < 2 { // the direct sweep: the first question only, twice
 			ptr := pack(qs[:1])
+			fails := 0
+			var last error
 			for _, a := range sweep {
 				if responders[a.IP.String()] == nil {
-					conn.WriteToUDP(ptr, a)
+					if _, err := conn.WriteToUDP(ptr, a); err != nil {
+						fails++
+						last = err
+					}
 				}
+			}
+			if fails > 0 {
+				logf("direct sweep round %d: %d sends failed, last: %v", round, fails, last)
 			}
 		}
 	}
@@ -118,6 +142,7 @@ func Find(wait time.Duration) ([]Board, error) {
 		if m.Unpack(buf[:n]) != nil || !m.Header.Response {
 			continue
 		}
+		logf("%.1fs answer from %s: %d records", time.Since(end.Add(-wait)).Seconds(), from, len(m.Answers)+len(m.Additionals))
 		if from.Port == 5353 {
 			responders[from.IP.String()] = &net.UDPAddr{IP: from.IP, Port: 5353}
 		}

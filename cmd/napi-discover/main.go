@@ -18,7 +18,11 @@ import (
 func main() {
 	wait := flag.Duration("t", 3*time.Second, "how long to listen for answers")
 	nowait := flag.Bool("n", false, "Windows: do not wait for Enter at the end")
+	verbose := flag.Bool("v", false, "show interfaces, sweep and every answer")
 	flag.Parse()
+	if *verbose {
+		napifind.Log = func(f string, a ...any) { fmt.Fprintf(os.Stderr, "  "+f+"\n", a...) }
+	}
 	err := run(*wait)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ошибка:", err)
