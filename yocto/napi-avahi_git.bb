@@ -7,9 +7,8 @@ The system hostname is not changed."
 HOMEPAGE = "https://github.com/lab240/napi-avahi"
 SECTION = "net"
 
-# The repository has no license file yet; replace with the real license and
-# LIC_FILES_CHKSUM once one is added.
-LICENSE = "CLOSED"
+LICENSE = "MIT"
+LIC_FILES_CHKSUM = "file://LICENSE;md5=6c03ec114e3986e4e8e203bc875e42cd"
 
 SRC_URI = "git://github.com/lab240/napi-avahi.git;protocol=https;branch=main"
 # Development: follow the branch. For a release, pin a commit instead:

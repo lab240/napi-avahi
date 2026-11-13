@@ -18,6 +18,7 @@ deb:
 	install -D -m 644 lib/systemd/system/napi-avahi.service build/deb/usr/lib/systemd/system/napi-avahi.service
 	install -D -m 644 etc/napi/avahi.conf build/deb/usr/share/napi-avahi/avahi.conf
 	install -D -m 644 README.md build/deb/usr/share/doc/napi-avahi/README.md
+	install -D -m 644 LICENSE build/deb/usr/share/doc/napi-avahi/copyright
 	install -d build/deb/DEBIAN
 	for f in postinst prerm postrm; do install -m 755 packaging/deb/$$f build/deb/DEBIAN/$$f; done
 	sed -e 's|@VERSION@|$(DEB_VERSION)|' \
@@ -35,10 +36,12 @@ install:
 	install -D -m 644 lib/systemd/system/napi-avahi.service $(DESTDIR)$(SYSTEMDUNITDIR)/napi-avahi.service
 	install -D -m 644 etc/napi/avahi.conf $(DESTDIR)$(SYSCONFDIR)/napi/avahi.conf
 
-# napi-finder.exe (Windows: window, --console), napi-discover (Linux console)
+# napi-finder.exe (Windows: window, --console; the icon, version and manifest from tools/mkres),
+# napi-discover (Linux console)
 tools:
 	mkdir -p build
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 $(GO) build -ldflags "-s -w" -o build/napi-finder.exe ./cmd/napi-finder
+	$(GO) run ./tools/mkres -ico assets/napi.ico -version $(DEB_VERSION) -o cmd/napi-finder/rsrc_windows_amd64.syso
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 $(GO) build -ldflags "-s -w -X main.version=$(DEB_VERSION)" -o build/napi-finder.exe ./cmd/napi-finder
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build -ldflags "-s -w" -o build/napi-discover-linux-amd64 ./cmd/napi-discover
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build -ldflags "-s -w" -o build/napi-discover-linux-arm64 ./cmd/napi-discover
 

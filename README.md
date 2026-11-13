@@ -37,7 +37,7 @@ apt update && apt install napi-avahi
 Рецепт `yocto/napi-avahi_git.bb`: положить в слой, добавить в образ
 `IMAGE_INSTALL:append = " napi-avahi"`. Тянет `avahi-daemon` и `avahi-utils`, ставит
 скрипт, включает `napi-avahi.service`, `/etc/napi/avahi.conf` помечен как `CONFFILES`.
-Скрипт проверен на busybox. Перед релизом закрепить `SRCREV` и указать лицензию.
+Скрипт проверен на busybox. Перед релизом закрепить `SRCREV`.
 
 ## Команды на плате
 
@@ -54,10 +54,19 @@ napi-avahi list                 # все NAPI в сети
 
 - **Windows:** один файл `napi-finder.exe`. Двойной щелчок: окно с кнопкой «Искать» и таблицей NAPI; кнопки
   napiconfig (8080), influxdb (8086), grafana (3000), donoff (8090) открывают выбранную плату
-  в браузере, двойной щелчок копирует IP. Если Windows спросит про брандмауэр, разрешите
+  в браузере, «SSH» открывает консоль, спрашивает логин и запускает `ssh <логин>@<IP>` (
+  ключ хоста не проверяется: платы перепрошивают), двойной щелчок копирует IP.
+  «Консоль ▾»: COM-порты с названием переходника и скорость (1500000 по умолчанию, это отладочный UART
+  RK3308/RK3568, или 115200); выбранный порт открывается консолью платы (8N1, стрелки, Tab,
+  Ctrl+C уходят на плату, выход Ctrl+]). Из командной строки: `.\napi-finder.exe --serial COM7 --baud 1500000`.
+  Если Windows спросит про брандмауэр, разрешите
   для частной сети. «Журнал» показывает, что делал последний поиск.
   В консоли: `.\napi-finder.exe --console` (`-v` журнал, `-t 5s` слушать дольше).
-- **Linux, консоль:** `napi-discover` (`-v`, `-t 5s`).
+- **Сырой поиск** (кнопка, `--console --raw`, `napi-discover --raw`), для плат без napi-avahi:
+  все адреса своей подсети с открытым портом 22 и признаки NAPI. Вердикт: `NAPI` (есть
+  napi-avahi), `NAPI?` (Linux плюс признаки: локальный MAC, как у Armbian, имя с napi,
+  порты 8080/8090/8086/3000/1883), `Linux`, `не NAPI` (MikroTik, Windows).
+- **Linux, консоль:** `napi-discover` (`-v`, `-t 5s`, `--raw`).
 - **Linux:** `avahi-browse -rt _napi._tcp`.
 - Просто по имени: `ping -4 napi3308-79df.local`, `http://napi3308-79df.local:8090`.
 
@@ -76,3 +85,8 @@ make tools       # build/napi-finder.exe, napi-discover-linux-{amd64,arm64}
 
 Пакет для repo.napilab.ru собирает `build-napi-avahi.sh` из
 [lab240/repo-napilab](https://github.com/lab240/repo-napilab).
+
+## Лицензия
+
+MIT, © 2026 napilab (lab240), см. [LICENSE](LICENSE). Программа предоставляется «как есть», без
+гарантий; авторы не отвечают за последствия её использования.
