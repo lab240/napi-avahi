@@ -1,8 +1,8 @@
-// mkres writes the Windows resources of napi-finder.exe as a COFF object (.syso) that go build
+// mkres writes the Windows resources of napi-discover.exe as a COFF object (.syso) that go build
 // links in: the icon (group 1), the version info (napilab, the version) and the manifest
 // (common controls 6, DPI aware, asInvoker). No tools outside Go.
 //
-//	go run ./tools/mkres -ico assets/napi.ico -version 0.1.2 -o cmd/napi-finder/rsrc_windows_amd64.syso
+//	go run ./tools/mkres -ico assets/napi.ico -version 0.1.2 -o cmd/napi-discover/rsrc_windows_amd64.syso
 package main
 
 import (
@@ -34,7 +34,7 @@ type res struct {
 func main() {
 	ico := flag.String("ico", "assets/napi.ico", "the icon")
 	ver := flag.String("version", "0.0.0", "x.y.z")
-	out := flag.String("o", "cmd/napi-finder/rsrc_windows_amd64.syso", "the object")
+	out := flag.String("o", "cmd/napi-discover/rsrc_windows_amd64.syso", "the object")
 	flag.Parse()
 
 	b, err := os.ReadFile(*ico)
@@ -87,8 +87,8 @@ func versionParts(s string) [4]uint16 {
 func manifest(v [4]uint16) string {
 	return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity type="win32" name="napilab.napi-finder" version="` + fmt.Sprintf("%d.%d.%d.%d", v[0], v[1], v[2], v[3]) + `" processorArchitecture="amd64"/>
-  <description>NAPI finder</description>
+  <assemblyIdentity type="win32" name="napilab.napi-discover" version="` + fmt.Sprintf("%d.%d.%d.%d", v[0], v[1], v[2], v[3]) + `" processorArchitecture="amd64"/>
+  <description>NAPI discover</description>
   <dependency>
     <dependentAssembly>
       <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/>
@@ -118,11 +118,11 @@ func versionInfo(v [4]uint16, ver string) []byte {
 	var strs [][]byte
 	for _, kv := range [][2]string{
 		{"CompanyName", "napilab"},
-		{"FileDescription", "NAPI finder: поиск плат NAPI в сети"},
+		{"FileDescription", "NAPI discover: поиск плат NAPI в сети"},
 		{"FileVersion", ver},
-		{"InternalName", "napi-finder"},
+		{"InternalName", "napi-discover"},
 		{"LegalCopyright", "napilab, lab240"},
-		{"OriginalFilename", "napi-finder.exe"},
+		{"OriginalFilename", "napi-discover.exe"},
 		{"ProductName", "napi-avahi"},
 		{"ProductVersion", ver},
 	} {

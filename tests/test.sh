@@ -60,6 +60,9 @@ check napilinux "os=napilinux-1.4" "$(sh $A show | grep '^os=')"
 rm "$T/etc/napilinux-release"
 echo 'PRETTY_NAME="Napi Linux 0.3.2"' >"$T/etc/os-release"
 check napilinux-os-release "os=napilinux-0.3.2" "$(sh $A show | grep '^os=')"
+echo 'PRETTY_NAME="Napi Linux (Yocto build) 0.3.1 (scarthgap)"' >"$T/etc/os-release"
+check napilinux-yocto "os=napilinux-0.3.1" "$(sh $A show | grep '^os=')"
+echo 'PRETTY_NAME="Napi Linux 0.3.2"' >"$T/etc/os-release"
 
 # install.sh / uninstall.sh (the archive for NapiLinux) into an empty root
 I=$(pwd)/build/test-install

@@ -56,8 +56,9 @@ os() {
 		echo "napilinux-$(head -1 "$R/etc/napilinux-release")"
 	elif [ -f "$R/etc/os-release" ]; then
 		# the words before the version, then the version: "Napi Linux 0.3.2" -> napilinux-0.3.2,
-		# "Armbian 26.11.0-trunk.117 noble" -> armbian-26.11.0-trunk.117
-		(. "$R/etc/os-release"; echo "$PRETTY_NAME" | awk '{
+		# "Armbian 26.11.0-trunk.117 noble" -> armbian-26.11.0-trunk.117; "(...)" is dropped:
+		# "Napi Linux (Yocto build) 0.3.1 (scarthgap)" -> napilinux-0.3.1
+		(. "$R/etc/os-release"; echo "$PRETTY_NAME" | sed 's/([^)]*)//g' | awk '{
 			n = ""; for (i = 1; i <= NF && $i !~ /^[0-9]/; i++) n = n $i
 			n = tolower(n); gsub(/[^a-z0-9]/, "", n); print (i <= NF ? n "-" $i : n)
 		}')
@@ -138,10 +139,12 @@ update() {
 	if cmp -s "$l_tmp" "$SERVICE"; then rm -f "$l_tmp"; else mv "$l_tmp" "$SERVICE"; fi
 
 	[ -z "$R" ] || return 0
-	# Apply without a restart: the name at once, the service file on reload.
+	# Apply without a restart: the name at once, the service file on reload. Without avahi-utils
+	# (NapiLinux) the name needs a restart of avahi: --no-block, because at boot this runs inside
+	# napi-avahi.service, which avahi-daemon waits for (a blocking restart would wait for it in turn).
 	if systemctl is-active -q avahi-daemon 2>/dev/null; then
 		[ "$(avahi-resolve-address 127.0.0.1 2>/dev/null | awk '{print $2}')" = "$l_n.local" ] ||
-			avahi-set-host-name "$l_n" 2>/dev/null || systemctl restart avahi-daemon
+			avahi-set-host-name "$l_n" 2>/dev/null || systemctl --no-block restart avahi-daemon
 		avahi-daemon --reload 2>/dev/null || true
 	fi
 	echo "$l_n.local"

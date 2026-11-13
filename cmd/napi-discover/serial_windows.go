@@ -1,6 +1,6 @@
 package main
 
-// The UART console of a NAPI (USB-UART adapter, COM port): napi-finder.exe --serial COM5 [--baud 1500000].
+// The UART console of a NAPI (USB-UART adapter, COM port): napi-discover.exe --serial COM5 [--baud 1500000].
 // The window's "COM" menu starts it in a console of its own. 8N1, no flow control; the console
 // passes the keys as VT sequences (arrows, Tab, Ctrl+C go to the board), Ctrl+] quits.
 
@@ -123,7 +123,7 @@ func serialMain(args []string) int {
 		}
 	}
 	if !comRe.MatchString(port) || baud <= 0 {
-		fmt.Println("napi-finder --serial COM5 [--baud 1500000]")
+		fmt.Println("napi-discover --serial COM5 [--baud 1500000]")
 		return 2
 	}
 	pSetConsoleTitle.Call(uintptr(unsafe.Pointer(u16(fmt.Sprintf("NAPI %s %d", port, baud)))))

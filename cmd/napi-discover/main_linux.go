@@ -1,9 +1,11 @@
-// napi-finder for Linux: the same tool as the Windows window, as a page in the browser served by
+// napi-discover for Linux: the same tool as the Windows window, as a page in the browser served by
 // itself on 127.0.0.1 (no GUI libraries: one static file for any desktop, X11 or Wayland).
 //
-//	napi-finder                               the page (Chrome/Chromium --app window, else xdg-open)
-//	napi-finder --console [-v] [-t 5s] [--raw]   the table in the console
-//	napi-finder --serial /dev/ttyUSB0 [--baud 115200]   the UART console
+//	napi-discover                               the page (Chrome/Chromium --app window, else xdg-open);
+//	                                            without a display (ssh) the table, as --console
+//	napi-discover --web                         the page anyway (prints the address without a display)
+//	napi-discover --console [-v] [-t 5s] [--raw]   the table in the console
+//	napi-discover --serial /dev/ttyUSB0 [--baud 115200]   the UART console
 //
 // SSH and the UART console open in a terminal window (gnome-terminal, konsole, xfce4-terminal, ...).
 // The page and its API live under a random token, and the Host header is checked: other users of
@@ -42,11 +44,13 @@ func main() {
 	if len(os.Args) > 1 && (os.Args[1] == "--serial" || os.Args[1] == "-serial") {
 		os.Exit(serialMain(os.Args[2:]))
 	}
-	if len(os.Args) > 1 {
-		os.Exit(cli.Run("napi-finder", os.Args[1:]))
+	web := len(os.Args) > 1 && (os.Args[1] == "--web" || os.Args[1] == "-web")
+	noDisplay := os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == ""
+	if !web && (len(os.Args) > 1 || noDisplay) { // flags, or ssh / a console: the table
+		os.Exit(cli.Run("napi-discover", os.Args[1:]))
 	}
 	if err := serve(); err != nil {
-		fmt.Fprintln(os.Stderr, "napi-finder:", err)
+		fmt.Fprintln(os.Stderr, "napi-discover:", err)
 		os.Exit(1)
 	}
 }
@@ -75,6 +79,7 @@ var (
 	started     time.Time
 	done, total atomic.Int32
 	lastPing    atomic.Int64
+	closing     atomic.Bool // the page said bye: exit unless it comes back (a reload)
 )
 
 func serve() error {
@@ -104,6 +109,7 @@ func serve() error {
 	}
 	api("state", false, func(w http.ResponseWriter, r *http.Request) {
 		lastPing.Store(time.Now().UnixMilli())
+		closing.Store(false)
 		mu.Lock()
 		s := st
 		mu.Unlock()
@@ -112,6 +118,16 @@ func serve() error {
 			s.Since = time.Since(started).Milliseconds()
 		}
 		writeJSON(w, s)
+	})
+	api("bye", true, func(w http.ResponseWriter, r *http.Request) {
+		closing.Store(true)
+		go func() {
+			time.Sleep(1500 * time.Millisecond)
+			if closing.Load() {
+				fmt.Println("napi-discover: страница закрыта, выхожу")
+				os.Exit(0)
+			}
+		}()
 	})
 	api("info", false, func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"version": version, "terminal": terminalName()})
@@ -156,15 +172,16 @@ func serve() error {
 		mux.ServeHTTP(w, r)
 	})}
 
-	fmt.Println("napi-finder:", url)
+	fmt.Println("napi-discover:", url)
 	fmt.Println("Закройте страницу или нажмите Ctrl+C, чтобы выйти.")
 	go openBrowser(url)
-	// Exit when the page has not polled for 20 s (closed), or no page came within 2 minutes.
+	// The page says bye when closed; failing that (a crashed browser) exit when it has not polled
+	// for 10 s, or no page came within 2 minutes.
 	lastPing.Store(time.Now().Add(100 * time.Second).UnixMilli())
 	go func() {
 		for range time.Tick(2 * time.Second) {
-			if time.Now().UnixMilli()-lastPing.Load() > 20000 {
-				fmt.Println("napi-finder: страница закрыта, выхожу")
+			if time.Now().UnixMilli()-lastPing.Load() > 10000 {
+				fmt.Println("napi-discover: страница закрыта, выхожу")
 				os.Exit(0)
 			}
 		}
@@ -265,8 +282,8 @@ func search(raw bool) bool {
 
 // An --app window of Chrome/Chromium looks like a program; else the default browser.
 func openBrowser(url string) {
-	if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" { // ssh, a console: the address only
-		fmt.Println("Нет графики: откройте адрес в браузере (ssh -L, если napi-finder на другой машине).")
+	if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" { // --web over ssh: the address only
+		fmt.Println("Нет графики: откройте адрес в браузере (ssh -L, если napi-discover на другой машине).")
 		return
 	}
 	for _, b := range []string{"chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "microsoft-edge"} {

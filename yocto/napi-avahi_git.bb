@@ -2,7 +2,7 @@ SUMMARY = "Find NAPI boards on the LAN without knowing their IP (mDNS)"
 DESCRIPTION = "napi-avahi gives the board the avahi (mDNS) name \
 napi<SoC>-<id>.local (id: 4 hex of md5 of the chip serial) and announces \
 the _napi._tcp service with TXT fields model, soc, os, role, mac, serial, \
-kernel. napi-finder.exe (Windows) and napi-discover (Linux) list the boards. \
+kernel. napi-discover.exe (Windows) and napi-discover (Linux) list the boards. \
 The system hostname is not changed."
 HOMEPAGE = "https://github.com/lab240/napi-avahi"
 SECTION = "net"

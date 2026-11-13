@@ -1,6 +1,6 @@
 package main
 
-// The UART console of a NAPI on Linux: napi-finder --serial /dev/ttyUSB0 [--baud 1500000].
+// The UART console of a NAPI on Linux: napi-discover --serial /dev/ttyUSB0 [--baud 1500000].
 // 8N1, no flow control, the terminal in raw mode (keys go to the board as they are), Ctrl+] quits.
 
 import (
@@ -33,7 +33,7 @@ func serialMain(args []string) int {
 		}
 	}
 	if !strings.HasPrefix(port, "/dev/") || speeds[baud] == 0 {
-		fmt.Println("napi-finder --serial /dev/ttyUSB0 [--baud 1500000]")
+		fmt.Println("napi-discover --serial /dev/ttyUSB0 [--baud 1500000]")
 		return 2
 	}
 	fmt.Printf("\033]0;NAPI %s %d\007", port, baud) // the terminal title

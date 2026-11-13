@@ -1,4 +1,4 @@
-// Package cli is the console mode of the finders: napi-discover (Linux) and napi-finder.exe --console.
+// Package cli is the console mode of napi-discover (--console; Linux without a display by default).
 package cli
 
 import (
@@ -20,7 +20,7 @@ func Run(name string, args []string) int {
 	wait := fs.Duration("t", 3*time.Second, "how long to listen for answers")
 	verbose := fs.Bool("v", false, "show interfaces, the direct sweep and every answer")
 	raw := fs.Bool("raw", false, "raw search: everything on TCP 22 of the own subnets, with the signs of a NAPI")
-	fs.Bool("console", false, "napi-finder.exe: the console instead of the window")
+	fs.Bool("console", false, "napi-discover.exe: the console instead of the window")
 	fs.Bool("n", false, "ignored (old: do not wait for Enter)")
 	if fs.Parse(args) != nil {
 		return 2

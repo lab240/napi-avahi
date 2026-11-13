@@ -1,4 +1,4 @@
-// napi-finder: a small Windows window that finds the NAPI boards on the LAN.
+// napi-discover: a small Windows window that finds the NAPI boards on the LAN.
 // Button "Искать", a table (name, IP, model, SoC, OS, role, MAC, signs); double click copies the IP,
 // napiconfig / influxdb / grafana / donoff open http://<IP>:<port> of the selected board; "Журнал"
 // shows what the last search did. "Сырой поиск" lists everything on TCP 22 of the subnet with the
@@ -6,12 +6,12 @@
 // ssh <login>@<IP> (the host key is not checked: boards get reflashed). "Консоль ▾" lists the COM ports
 // and opens the UART console of a board (1500000 8N1 by default; serial_windows.go). A progress bar runs while searching. Plain Win32.
 //
-//	napi-finder.exe                     the window
-//	napi-finder.exe --console [-v] [-t 5s]   the table in the console (-v: the log)
-//	napi-finder.exe --console --raw          the raw search in the console
-//	napi-finder.exe --serial COM5 [--baud 115200]   the UART console
+//	napi-discover.exe                     the window
+//	napi-discover.exe --console [-v] [-t 5s]   the table in the console (-v: the log)
+//	napi-discover.exe --console --raw          the raw search in the console
+//	napi-discover.exe --serial COM5 [--baud 115200]   the UART console
 //
-// Built as a console program (GOOS=windows go build -o napi-finder.exe ./cmd/napi-finder), so the
+// Built as a console program (GOOS=windows go build -o napi-discover.exe ./cmd/napi-discover), so the
 // console mode prints into the terminal it was started from and the terminal waits for it. Started
 // with a double click it owns a console of its own: it hides and drops it and opens the window.
 package main
@@ -243,7 +243,7 @@ func main() {
 		os.Exit(serialMain(os.Args[2:]))
 	}
 	if len(os.Args) > 1 {
-		code := cli.Run("napi-finder", os.Args[1:])
+		code := cli.Run("napi-discover", os.Args[1:])
 		if ownConsole() { // started from Explorer with arguments (a shortcut): keep the output readable
 			fmt.Print("\nНажмите Enter...")
 			fmt.Scanln()
@@ -286,7 +286,7 @@ func window() {
 	wc := wndClassEx{
 		wndProc: syscall.NewCallback(wndProc), instance: inst, cursor: cursor,
 		icon: loadIcon(11), iconSm: loadIcon(49), // SM_CXICON, SM_CXSMICON
-		brush: 16, className: u16("NapiFinder"), // COLOR_BTNFACE+1
+		brush: 16, className: u16("NapiDiscover"), // COLOR_BTNFACE+1
 	}
 	wc.size = uint32(unsafe.Sizeof(wc))
 	pRegisterClassEx.Call(uintptr(unsafe.Pointer(&wc)))
@@ -715,7 +715,7 @@ var helpCallback = syscall.NewCallback(func(hwnd, msg, wp, lp, data uintptr) uin
 
 func help() {
 	inst, _, _ := pGetModuleHandle.Call(0)
-	title, main := u16("Help"), u16("napi-finder "+version)
+	title, main := u16("Help"), u16("napi-discover "+version)
 	text, foot := u16(helpText), u16(helpFooter)
 	// TASKDIALOGCONFIG is packed (pshpack1): 160 bytes on amd64, filled by offsets.
 	var c [160]byte

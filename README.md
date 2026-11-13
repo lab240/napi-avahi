@@ -62,34 +62,30 @@ napi-avahi list                 # все NAPI в сети
 
 Настройки лежат в `/etc/napi/avahi.conf` (`ROLE=`, `NAME=`); после ручной правки `napi-avahi update`.
 
-## Поиск с компьютера
+## Поиск с компьютера: napi-discover
 
-Готовые программы: [Releases](https://github.com/lab240/napi-avahi/releases/latest)
-(`napi-finder.exe` для Windows, `napi-finder-linux-amd64` / `-arm64`, `napi-discover-linux-*`).
+Готовые программы: [Releases](https://github.com/lab240/napi-avahi/releases/latest):
+`napi-discover.exe` (Windows 10/11), `napi-discover-linux-amd64` / `-arm64` (Linux; после
+скачивания `chmod +x`). Один файл, ничего ставить не нужно.
 
-- **Windows:** один файл `napi-finder.exe`. Двойной щелчок: окно с кнопкой «Искать» и таблицей NAPI; кнопки
-  napiconfig (8080), influxdb (8086), grafana (3000), donoff (8090) открывают выбранную плату
-  в браузере, «SSH» открывает консоль, спрашивает логин и запускает `ssh <логин>@<IP>` (
-  ключ хоста не проверяется: платы перепрошивают), двойной щелчок копирует IP.
-  «Консоль ▾»: COM-порты с названием переходника и скорость (1500000 по умолчанию, это отладочный UART
-  RK3308/RK3568, или 115200); выбранный порт открывается консолью платы (8N1, стрелки, Tab,
-  Ctrl+C уходят на плату, выход Ctrl+]). Из командной строки: `.\napi-finder.exe --serial COM7 --baud 1500000`.
-  Если Windows спросит про брандмауэр, разрешите
-  для частной сети. «Журнал» показывает, что делал последний поиск.
-  В консоли: `.\napi-finder.exe --console` (`-v` журнал, `-t 5s` слушать дольше).
-- **Сырой поиск** (кнопка, `--console --raw`, `napi-discover --raw`), для плат без napi-avahi:
-  все адреса своей подсети с открытым портом 22 и признаки NAPI. Вердикт: `NAPI` (есть
-  napi-avahi), `NAPI?` (Linux плюс признаки: локальный MAC, как у Armbian, имя с napi,
-  порты 8080/8090/8086/3000/1883), `Linux`, `не NAPI` (MikroTik, Windows).
-- **Linux, окно:** один файл `napi-finder-linux-amd64` (или `-arm64`), без Qt/GTK и других библиотек.
-  Запуск без аргументов открывает страницу на 127.0.0.1 в браузере (отдельным окном, если есть
-  Chrome/Chromium) с теми же кнопками, что в Windows. SSH и консоль UART открываются в терминале
-  (gnome-terminal, konsole, xfce4-terminal, xterm...; или `$TERMINAL`). Для UART пользователь должен
-  быть в группе `dialout`. Программа выходит сама, когда страницу закрыли. Ещё: `--console`,
-  `--serial /dev/ttyUSB0 [--baud 115200]`.
-- **Linux, консоль:** `napi-discover` (`-v`, `-t 5s`, `--raw`).
-- **Linux:** `avahi-browse -rt _napi._tcp`.
-- Просто по имени: `ping -4 napi3308-79df.local`, `http://napi3308-79df.local:8090`.
+- **Windows:** двойной щелчок открывает окно. **Linux:** запуск открывает страницу на 127.0.0.1
+  в браузере (отдельным окном, если есть Chrome/Chromium; без Qt/GTK); программа выходит, когда
+  страницу закрыли. Без графики (ssh) печатает таблицу, страницу и там откроет `--web`.
+- «Искать»: платы с napi-avahi (зелёные строки). «Сырой поиск»: все адреса своей подсети с
+  открытым портом 22, кроме шлюза и DNS, с признаками NAPI, для плат без napi-avahi. Вердикт:
+  `NAPI` (есть napi-avahi), `NAPI?` (Linux и признаки: MAC как у Armbian, «napi» в имени,
+  napiconfig на 8080, порты 8090/8086/3000/1883; жёлтые строки), `Linux`, `не NAPI` (MikroTik, Windows).
+- napiconfig (8080), influxdb (8086), grafana (3000), donoff (8090) открывают выбранную плату в
+  браузере. «SSH» и двойной щелчок по строке: терминал, спрашивает логин, `ssh <логин>@<IP>`
+  (ключ хоста не проверяется: платы перепрошивают). Ctrl+C копирует IP.
+- «Консоль ▾»: COM-порты (`/dev/ttyUSB*`, `/dev/ttyACM*`) с названием переходника и скорость
+  (1500000, отладочный UART RK3308/RK3568, или 115200); консоль платы 8N1, выход Ctrl+].
+  В Linux пользователь должен быть в группе `dialout`.
+- «Журнал»: что делал последний поиск. «Help»: ссылки, лицензия.
+- Командная строка: `napi-discover --console` (`-v` журнал, `-t 5s` слушать дольше, `--raw` сырой
+  поиск), `napi-discover --serial COM7` или `--serial /dev/ttyUSB0` (`--baud 115200`).
+- Windows может спросить про брандмауэр: разрешите для частной сети.
+- Без программ: `avahi-browse -rt _napi._tcp` (Linux), по имени: `ping -4 napi3308-79df.local`.
 
 Утилиты спрашивают mDNS с обычного UDP-порта (legacy unicast), поэтому не мешают
 mDNS-службе Windows и работают без установки Bonjour. Кроме общего запроса (multicast) они
@@ -101,7 +97,7 @@ multicast из проводной сети к своим клиентам, и NA
 ```sh
 make test        # тесты скрипта на поддельной плате
 make deb         # build/napi-avahi_<версия>_all.deb
-make tools       # build/napi-finder.exe, napi-finder-linux-{amd64,arm64}, napi-discover-linux-{amd64,arm64}
+make tools       # build/napi-discover.exe, napi-discover-linux-{amd64,arm64}
 ```
 
 Пакет для repo.napilab.ru собирает `build-napi-avahi.sh` из

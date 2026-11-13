@@ -1,5 +1,5 @@
 # napi-avahi: the board side is a shell script (Debian package, Architecture: all);
-# the finders for PCs are Go (make tools).
+# napi-discover for PCs is Go (make tools).
 VERSION = 0.1.2
 DEB_VERSION ?= $(VERSION)
 DEB = build/napi-avahi_$(DEB_VERSION)_all.deb
@@ -45,16 +45,14 @@ install:
 	install -D -m 644 lib/systemd/system/napi-avahi.service $(DESTDIR)$(SYSTEMDUNITDIR)/napi-avahi.service
 	install -D -m 644 etc/napi/avahi.conf $(DESTDIR)$(SYSCONFDIR)/napi/avahi.conf
 
-# napi-finder.exe (Windows: window, --console; the icon, version and manifest from tools/mkres),
-# napi-finder for Linux (the page in the browser, --console, --serial), napi-discover (Linux console)
+# napi-discover for PCs: Windows (window, --console, --serial COMx; the icon, version and manifest
+# from tools/mkres) and Linux (the page in the browser, --console, --serial /dev/ttyUSB0)
 tools:
 	mkdir -p build
-	$(GO) run ./tools/mkres -ico assets/napi.ico -version $(DEB_VERSION) -o cmd/napi-finder/rsrc_windows_amd64.syso
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 $(GO) build -ldflags "-s -w -X main.version=$(DEB_VERSION)" -o build/napi-finder.exe ./cmd/napi-finder
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build -ldflags "-s -w -X main.version=$(DEB_VERSION)" -o build/napi-finder-linux-amd64 ./cmd/napi-finder
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build -ldflags "-s -w -X main.version=$(DEB_VERSION)" -o build/napi-finder-linux-arm64 ./cmd/napi-finder
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build -ldflags "-s -w" -o build/napi-discover-linux-amd64 ./cmd/napi-discover
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build -ldflags "-s -w" -o build/napi-discover-linux-arm64 ./cmd/napi-discover
+	$(GO) run ./tools/mkres -ico assets/napi.ico -version $(DEB_VERSION) -o cmd/napi-discover/rsrc_windows_amd64.syso
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 $(GO) build -ldflags "-s -w -X main.version=$(DEB_VERSION)" -o build/napi-discover.exe ./cmd/napi-discover
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build -ldflags "-s -w -X main.version=$(DEB_VERSION)" -o build/napi-discover-linux-amd64 ./cmd/napi-discover
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build -ldflags "-s -w -X main.version=$(DEB_VERSION)" -o build/napi-discover-linux-arm64 ./cmd/napi-discover
 
 clean:
 	rm -rf build

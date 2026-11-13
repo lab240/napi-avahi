@@ -92,7 +92,7 @@ dialog form { text-align: right; margin-top: 10px; }
 </main>
 
 <dialog id="help">
-  <h2><img src="napi.svg" alt=""> napi-finder <span id="ver"></span></h2>
+  <h2><img src="napi.svg" alt=""> napi-discover <span id="ver"></span></h2>
   <p>Поиск плат NAPI в сети, SSH и консоль UART.</p>
   <p>«Искать»: платы с сервисом napi-avahi. «Сырой поиск»: всё, что отвечает на порту 22, с признаками NAPI (для плат без napi-avahi).
     «Консоль»: UART платы через USB-переходник, 1500000 8N1, выход Ctrl+]. napiconfig, SSH, influxdb, grafana, donoff: выбранная в таблице плата;
@@ -155,7 +155,7 @@ async function search(raw) {
 
 async function poll() {
   let s;
-  try { s = await api("state"); } catch (e) { status("Нет связи с napi-finder: " + e.message); setTimeout(poll, 1000); return; }
+  try { s = await api("state"); } catch (e) { status("Нет связи с napi-discover: " + e.message); setTimeout(poll, 1000); return; }
   tick++;
   const dots = ["", ".", "..", "..."][Math.floor(tick / 2) % 4];
   if (s.busy) {
@@ -184,7 +184,7 @@ async function poll() {
       : `Найдено: ${rows.length}. Двойной щелчок: SSH; Ctrl+C копирует IP.`);
   }
   first = false;
-  setTimeout(poll, 3000); // keep-alive: napi-finder exits when the page is closed
+  setTimeout(poll, 3000); // keep-alive: napi-discover exits when the page is closed
 }
 
 $("#find").onclick = () => search(false);
@@ -245,6 +245,8 @@ if (window.outerHeight > 640 || window.outerWidth < 1000) {
   const w = Math.min(1320, screen.availWidth), h = Math.min(580, screen.availHeight);
   try { window.resizeTo(w, h); window.moveTo((screen.availWidth - w) / 2 + (screen.availLeft || 0), (screen.availHeight - h) / 3 + (screen.availTop || 0)); } catch (e) {}
 }
+// Closed: tell napi-discover at once (it exits unless the page comes back, as on a reload).
+addEventListener("pagehide", () => navigator.sendBeacon("api/bye"));
 buttons();
 poll();
 </script>
