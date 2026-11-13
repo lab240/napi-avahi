@@ -1,0 +1,15 @@
+[Unit]
+Description=NAPI on the LAN: mDNS name napi<SoC>-<MAC>.local and the _napi._tcp service
+Documentation=https://github.com/lab240/napi-avahi
+# The MAC is final after napi-mac; the name must be in avahi-daemon.conf before avahi starts.
+After=systemd-udevd.service napi-mac.service
+Before=avahi-daemon.service
+Wants=avahi-daemon.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/napi-avahi update
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

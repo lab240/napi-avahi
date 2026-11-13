@@ -1,0 +1,173 @@
+#!/bin/sh
+# napi-avahi: makes this NAPI findable on the LAN without knowing its IP (mDNS, avahi).
+#   name     napi<SoC>-<last 4 hex of MAC>.local, e.g. napi3308-b9df.local, napi3568-1c2e.local
+#   service  _napi._tcp (port 22) with TXT: model, soc, os, role, mac, kernel
+# napi-finder.exe / napi-discover (Windows, Linux) and "napi-avahi list" show them all.
+#
+#   napi-avahi update               write the avahi name and the service, apply (the service runs it at boot)
+#   napi-avahi role donoff,mgate    set the role (empty: none) and update
+#   napi-avahi name kotelnaya       own name instead of napi<SoC>-<MAC> (empty: back to it) and update
+#   napi-avahi show                 what this board announces
+#   napi-avahi list                 all NAPI boards on the LAN
+#
+# Settings: /etc/napi/avahi.conf (ROLE=, NAME=). The system hostname is not changed.
+# NAPI_AVAHI_ROOT=<dir> runs on a copy of /proc, /sys and /etc (tests).
+set -e
+
+R=${NAPI_AVAHI_ROOT:-}
+CONF=$R/etc/napi/avahi.conf
+AVAHI_CONF=$R/etc/avahi/avahi-daemon.conf
+SERVICE=$R/etc/avahi/services/napi.service
+
+ROLE=
+NAME=
+[ -f "$CONF" ] && . "$CONF"
+
+# rockchip,rk3308 -> 3308; another SoC: the last word of the compatible list
+soc() {
+	l_c=$(tr '\0' '\n' <"$R/proc/device-tree/compatible" 2>/dev/null || true)
+	l_s=$(echo "$l_c" | sed -n 's/^rockchip,rk\([0-9][0-9]*\)$/\1/p' | head -1)
+	[ -n "$l_s" ] || l_s=$(echo "$l_c" | tail -1 | sed 's/.*,//; s/[^a-z0-9]//g')
+	echo "$l_s"
+}
+
+model() { tr -d '\0' <"$R/proc/device-tree/model" 2>/dev/null | sed 's/ *$//' || true; }
+
+# The board's own Ethernet: end0 or eth0, else the first one with a device behind it.
+iface() {
+	for l_i in end0 eth0; do
+		[ -e "$R/sys/class/net/$l_i/address" ] && { echo $l_i; return; }
+	done
+	for l_d in "$R"/sys/class/net/*; do
+		[ -e "$l_d/device" ] && [ "$(cat "$l_d/type" 2>/dev/null)" = 1 ] && { basename "$l_d"; return; }
+	done
+	return 0
+}
+
+mac() {
+	l_i=$(iface)
+	[ -z "$l_i" ] || cat "$R/sys/class/net/$l_i/address"
+}
+
+os() {
+	if [ -f "$R/etc/napilinux-release" ]; then
+		echo "napilinux-$(head -1 "$R/etc/napilinux-release")"
+	elif [ -f "$R/etc/os-release" ]; then
+		(. "$R/etc/os-release"; echo "$PRETTY_NAME" | awk '{print tolower($1)"-"$2}')
+	fi
+}
+
+kernel() { cat "$R/proc/sys/kernel/osrelease" 2>/dev/null || uname -r; }
+
+name() {
+	if [ -n "$NAME" ]; then echo "$NAME"; return; fi
+	l_m=$(mac | tr -d ':')
+	echo "napi$(soc)-$(echo "$l_m" | tail -c 5)"
+}
+
+valid_name() { echo "$1" | grep -Eq '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'; }
+
+# Shown in the TXT records; & < > would break the XML of avahi.
+xml() { echo "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'; }
+
+show() {
+	echo "name=$(name).local"
+	echo "model=$(model)"
+	echo "soc=rk$(soc)"
+	echo "os=$(os)"
+	echo "role=$ROLE"
+	echo "mac=$(mac)"
+	echo "kernel=$(kernel)"
+}
+
+set_conf() { # key value
+	mkdir -p "$(dirname "$CONF")"
+	touch "$CONF"
+	if grep -q "^$1=" "$CONF"; then
+		sed -i "s|^$1=.*|$1=$2|" "$CONF"
+	else
+		echo "$1=$2" >>"$CONF"
+	fi
+}
+
+update() {
+	l_n=$(name)
+	valid_name "$l_n" || { echo "napi-avahi: bad name '$l_n': a-z, 0-9, '-', up to 63" >&2; exit 1; }
+	if [ -f "$AVAHI_CONF" ]; then
+		if grep -q '^host-name=' "$AVAHI_CONF"; then
+			sed -i "s/^host-name=.*/host-name=$l_n/" "$AVAHI_CONF"
+		else
+			sed -i "/^\[server\]/a host-name=$l_n" "$AVAHI_CONF"
+		fi
+	fi
+	mkdir -p "$(dirname "$SERVICE")"
+	l_tmp=$SERVICE.tmp
+	{
+		echo '<?xml version="1.0" standalone="no"?>'
+		echo '<!DOCTYPE service-group SYSTEM "avahi-service.dtd">'
+		echo '<service-group>'
+		echo "  <name>$l_n</name>"
+		echo '  <service>'
+		echo '    <type>_napi._tcp</type>'
+		echo '    <port>22</port>'
+		show | grep -v '^name=' | while IFS= read -r l_kv; do
+			echo "    <txt-record>$(xml "$l_kv")</txt-record>"
+		done
+		echo '  </service>'
+		echo '</service-group>'
+	} >"$l_tmp"
+	if cmp -s "$l_tmp" "$SERVICE"; then rm -f "$l_tmp"; else mv "$l_tmp" "$SERVICE"; fi
+
+	[ -z "$R" ] || return 0
+	# Apply without a restart: the name at once, the service file on reload.
+	if systemctl is-active -q avahi-daemon 2>/dev/null; then
+		[ "$(avahi-resolve-address 127.0.0.1 2>/dev/null | awk '{print $2}')" = "$l_n.local" ] ||
+			avahi-set-host-name "$l_n" 2>/dev/null || systemctl restart avahi-daemon
+		avahi-daemon --reload 2>/dev/null || true
+	fi
+	echo "$l_n.local"
+}
+
+# All boards: avahi-browse in its parsable form -> a table.
+list() {
+	avahi-browse -rtp _napi._tcp 2>/dev/null | awk -F';' '
+		$1 == "=" && $3 == "IPv4" {
+			txt = $10; model = soc = os = role = mac = "-"
+			n = split(txt, a, "\" \"")
+			for (i = 1; i <= n; i++) {
+				gsub(/"/, "", a[i]); k = a[i]; sub(/=.*/, "", k); v = a[i]; sub(/^[^=]*=/, "", v)
+				if (v == "") v = "-"
+				if (k == "model") model = v; else if (k == "soc") soc = v; else if (k == "os") os = v
+				else if (k == "role") role = v; else if (k == "mac") mac = v
+			}
+			if (!seen[$7]++) printf "%-22s %-15s %-8s %-7s %-26s %-12s %s\n", $7, $8, model, soc, os, role, mac
+		}' | sort | { printf "%-22s %-15s %-8s %-7s %-26s %-12s %s\n" NAME IP MODEL SOC OS ROLE MAC; cat; }
+}
+
+case "$1" in
+update) update ;;
+role)
+	if ! echo "$2" | grep -Eq '^[A-Za-z0-9,._-]*$'; then
+		echo "napi-avahi: bad role '$2': letters, digits, ',', '.', '_', '-'" >&2
+		exit 1
+	fi
+	set_conf ROLE "$2"
+	ROLE=$2
+	update
+	;;
+name)
+	if [ -n "$2" ] && ! valid_name "$2"; then
+		echo "napi-avahi: bad name '$2': a-z, 0-9, '-', up to 63" >&2
+		exit 1
+	fi
+	set_conf NAME "$2"
+	NAME=$2
+	update
+	;;
+show) show ;;
+list) list ;;
+*)
+	sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+	exit 2
+	;;
+esac

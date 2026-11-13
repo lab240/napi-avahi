@@ -1,0 +1,28 @@
+#!/bin/sh
+#
+# napi-avahi postrm: stop announcing (the service file, our host-name in avahi);
+# purge removes the settings.
+#
+set -e
+
+case "$1" in
+remove|purge)
+	rm -f /etc/avahi/services/napi.service
+	if [ -f /etc/avahi/avahi-daemon.conf ]; then
+		sed -i '/^host-name=/d' /etc/avahi/avahi-daemon.conf
+	fi
+	if [ -d /run/systemd/system ]; then
+		systemctl daemon-reload || true
+		systemctl try-restart avahi-daemon.service || true
+	fi
+	;;
+esac
+
+case "$1" in
+purge)
+	rm -f /etc/napi/avahi.conf
+	rmdir /etc/napi 2>/dev/null || true
+	;;
+esac
+
+exit 0

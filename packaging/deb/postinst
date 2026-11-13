@@ -1,0 +1,28 @@
+#!/bin/sh
+#
+# napi-avahi postinst: default settings, the service, announce at once.
+#
+set -e
+
+case "$1" in
+configure)
+	# Not a dpkg conffile: "napi-avahi role/name" edit it.
+	mkdir -p /etc/napi
+	if [ ! -e /etc/napi/avahi.conf ]; then
+		cp /usr/share/napi-avahi/avahi.conf /etc/napi/avahi.conf
+		# napi-avahi-setup.sh of the first test kept the role here
+		if [ -s /etc/napi-role ]; then
+			sed -i "s|^ROLE=.*|ROLE=$(head -1 /etc/napi-role)|" /etc/napi/avahi.conf
+			rm -f /etc/napi-role
+		fi
+	fi
+
+	systemctl enable napi-avahi.service >/dev/null 2>&1 || true
+	if [ -d /run/systemd/system ]; then
+		systemctl daemon-reload || true
+		/usr/bin/napi-avahi update || true
+	fi
+	;;
+esac
+
+exit 0

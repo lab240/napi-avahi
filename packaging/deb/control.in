@@ -1,0 +1,18 @@
+Package: napi-avahi
+Version: @VERSION@
+Section: net
+Priority: optional
+Architecture: all
+Installed-Size: @SIZE@
+Depends: avahi-daemon, avahi-utils
+Maintainer: NapiLab <info@napilab.ru>
+Homepage: https://github.com/lab240/napi-avahi
+Description: Find NAPI boards on the LAN without knowing their IP
+ Gives the board the mDNS name napi<SoC>-<MAC>.local (napi3308-b9df.local,
+ napi3568-1c2e.local) and announces the service _napi._tcp with TXT records:
+ model, SoC, OS, role, MAC, kernel. The name and the records are refreshed at
+ every boot; the system hostname is not changed.
+ .
+ Settings: /etc/napi/avahi.conf, or "napi-avahi role donoff,mgate" and
+ "napi-avahi name <name>". All boards: "napi-avahi list" here, napi-finder.exe
+ on Windows.
