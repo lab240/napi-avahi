@@ -665,7 +665,8 @@ const helpText = `Поиск плат NAPI в сети, SSH и консоль UA
 Чтобы плата находилась кнопкой «Искать», на ней должен стоять сервис napi-avahi:
     apt install napi-avahi
 из репозитория napilab: <a href="https://repo.napilab.ru">repo.napilab.ru</a>
-Исходники и подключение репозитория: <a href="https://github.com/lab240/napi-avahi">github.com/lab240/napi-avahi</a>`
+Исходники и подключение репозитория: <a href="https://github.com/lab240/napi-avahi">github.com/lab240/napi-avahi</a>
+Свежая версия программы: <a href="https://github.com/lab240/napi-avahi/releases/latest">github.com/lab240/napi-avahi/releases</a>`
 
 const helpFooter = `© 2026 napilab (lab240). Свободная программа под <a href="https://github.com/lab240/napi-avahi/blob/main/LICENSE">лицензией MIT</a>: её можно использовать, копировать, изменять и распространять, в том числе в коммерческих целях, если сохранено это уведомление. Программа предоставляется «как есть», без каких-либо гарантий. Авторы не несут ответственности за любые последствия её использования, в том числе за ущерб, потерю данных и сбои оборудования.`
 

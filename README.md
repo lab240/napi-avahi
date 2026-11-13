@@ -64,6 +64,9 @@ napi-avahi list                 # все NAPI в сети
 
 ## Поиск с компьютера
 
+Готовые программы: [Releases](https://github.com/lab240/napi-avahi/releases/latest)
+(`napi-finder.exe` для Windows, `napi-finder-linux-amd64` / `-arm64`, `napi-discover-linux-*`).
+
 - **Windows:** один файл `napi-finder.exe`. Двойной щелчок: окно с кнопкой «Искать» и таблицей NAPI; кнопки
   napiconfig (8080), influxdb (8086), grafana (3000), donoff (8090) открывают выбранную плату
   в браузере, «SSH» открывает консоль, спрашивает логин и запускает `ssh <логин>@<IP>` (
