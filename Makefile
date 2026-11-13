@@ -1,6 +1,6 @@
 # napi-avahi: the board side is a shell script (Debian package, Architecture: all);
 # the finders for PCs are Go (make tools).
-VERSION = 0.1.1
+VERSION = 0.1.2
 DEB_VERSION ?= $(VERSION)
 DEB = build/napi-avahi_$(DEB_VERSION)_all.deb
 GO ?= go
@@ -25,6 +25,16 @@ deb:
 	    packaging/deb/control.in > build/deb/DEBIAN/control
 	dpkg-deb --root-owner-group --build build/deb $(DEB)
 
+# For Yocto and manual installs; the deb target lays out the same files.
+DESTDIR ?=
+BINDIR ?= /usr/bin
+SYSTEMDUNITDIR ?= /usr/lib/systemd/system
+SYSCONFDIR ?= /etc
+install:
+	install -D -m 755 usr/bin/napi-avahi $(DESTDIR)$(BINDIR)/napi-avahi
+	install -D -m 644 lib/systemd/system/napi-avahi.service $(DESTDIR)$(SYSTEMDUNITDIR)/napi-avahi.service
+	install -D -m 644 etc/napi/avahi.conf $(DESTDIR)$(SYSCONFDIR)/napi/avahi.conf
+
 # napi-finder.exe (Windows: window, --console), napi-discover (Linux console)
 tools:
 	mkdir -p build
@@ -35,4 +45,4 @@ tools:
 clean:
 	rm -rf build
 
-.PHONY: all test deb tools clean
+.PHONY: all test deb install tools clean

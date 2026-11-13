@@ -32,6 +32,13 @@ echo "deb [arch=arm64 signed-by=/usr/share/keyrings/napilab.gpg] https://repo.na
 apt update && apt install napi-avahi
 ```
 
+## NapiLinux (Yocto)
+
+Рецепт `yocto/napi-avahi_git.bb`: положить в слой, добавить в образ
+`IMAGE_INSTALL:append = " napi-avahi"`. Тянет `avahi-daemon` и `avahi-utils`, ставит
+скрипт, включает `napi-avahi.service`, `/etc/napi/avahi.conf` помечен как `CONFFILES`.
+Скрипт проверен на busybox. Перед релизом закрепить `SRCREV` и указать лицензию.
+
 ## Команды на плате
 
 ```sh

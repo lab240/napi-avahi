@@ -57,5 +57,8 @@ printf 'napilab,napi2\0rockchip,rk3568\0' >"$T/proc/device-tree/compatible"
 echo 1.4 >"$T/etc/napilinux-release"
 check napi2 "name=napi3568-1c2e.local" "$(sh $A show | grep '^name=')"
 check napilinux "os=napilinux-1.4" "$(sh $A show | grep '^os=')"
+rm "$T/etc/napilinux-release"
+echo 'PRETTY_NAME="Napi Linux 0.3.2"' >"$T/etc/os-release"
+check napilinux-os-release "os=napilinux-0.3.2" "$(sh $A show | grep '^os=')"
 
 exit $fail

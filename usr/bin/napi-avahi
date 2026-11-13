@@ -55,7 +55,12 @@ os() {
 	if [ -f "$R/etc/napilinux-release" ]; then
 		echo "napilinux-$(head -1 "$R/etc/napilinux-release")"
 	elif [ -f "$R/etc/os-release" ]; then
-		(. "$R/etc/os-release"; echo "$PRETTY_NAME" | awk '{print tolower($1)"-"$2}')
+		# the words before the version, then the version: "Napi Linux 0.3.2" -> napilinux-0.3.2,
+		# "Armbian 26.11.0-trunk.117 noble" -> armbian-26.11.0-trunk.117
+		(. "$R/etc/os-release"; echo "$PRETTY_NAME" | awk '{
+			n = ""; for (i = 1; i <= NF && $i !~ /^[0-9]/; i++) n = n $i
+			n = tolower(n); gsub(/[^a-z0-9]/, "", n); print (i <= NF ? n "-" $i : n)
+		}')
 	fi
 }
 
