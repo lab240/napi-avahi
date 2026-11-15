@@ -50,6 +50,10 @@ th { font-weight: 600; position: sticky; top: 0; background: var(--panel); }
 tbody tr { cursor: default; }
 tbody tr.avahi { background: var(--avahi); }
 tbody tr.raw { background: var(--raw); }
+tbody tr.gone { color: var(--muted); }
+td.fx { padding-left: 6px; }
+td.fx input { vertical-align: -2px; margin: 0 6px 0 0; cursor: pointer; accent-color: var(--accent); }
+td.fx b { font-weight: 600; cursor: text; }
 tbody tr.sel { background: var(--sel); color: var(--sel-text); box-shadow: inset 3px 0 0 var(--accent); }
 td.empty { color: var(--muted); text-align: center; padding: 30px; white-space: normal; }
 #log { display: none; margin-top: 8px; max-height: 220px; overflow: auto; background: var(--panel); border: 1px solid var(--line);
@@ -85,8 +89,8 @@ dialog form { text-align: right; margin-top: 10px; }
 <div id="bar"><div id="prog"><div></div></div><span id="status">Нажмите «Искать» (платы с napi-avahi) или «Сырой поиск» (всё, что отвечает на порту 22).</span></div>
 <main>
   <div class="wrap"><table>
-    <thead><tr><th>Имя</th><th>IP</th><th>Модель</th><th>SoC</th><th>ОС</th><th>Роль</th><th>MAC</th><th>Признаки</th></tr></thead>
-    <tbody id="rows"><tr><td class="empty" colspan="8">Плат пока нет</td></tr></tbody>
+    <thead><tr><th title="Отметьте плату и дайте ей своё имя: она будет первой в списке и узнается, даже если сменит IP или имя в сети">Моё имя</th><th>Имя</th><th>IP</th><th>Модель</th><th>SoC</th><th>ОС</th><th>Роль</th><th>MAC</th><th>Признаки</th></tr></thead>
+    <tbody id="rows"><tr><td class="empty" colspan="9">Плат пока нет</td></tr></tbody>
   </table></div>
   <div id="log"></div>
 </main>
@@ -97,6 +101,9 @@ dialog form { text-align: right; margin-top: 10px; }
   <p>«Искать»: платы с сервисом napi-avahi. «Сырой поиск»: всё, что отвечает на порту 22, с признаками NAPI (для плат без napi-avahi).
     «Консоль»: UART платы через USB-переходник, 1500000 8N1, выход Ctrl+]. napiconfig, SSH, influxdb, grafana, donoff: выбранная в таблице плата;
     двойной щелчок по строке: SSH, Ctrl+C: копировать IP. Зелёные строки найдены через napi-avahi, жёлтые: «NAPI?» сырого поиска.</p>
+  <p>Галочка «Моё имя»: дайте плате своё имя. Отмеченные платы идут первыми, «Искать» проверяет их и без napi-avahi,
+    плата узнаётся по ключу SSH и MAC, даже если сменился IP или имя в сети. Не найденная плата остаётся серой строкой внизу.
+    Двойной щелчок по имени: переименовать. Список хранится на этом компьютере: <code>~/.config/napi-discover/boards.json</code>.</p>
   <p>Чтобы плата находилась кнопкой «Искать», на ней должен стоять сервис napi-avahi: <code>apt install napi-avahi</code>
     из репозитория napilab: <a href="https://repo.napilab.ru" target="_blank">repo.napilab.ru</a>.
     Исходники и подключение репозитория: <a href="https://github.com/lab240/napi-avahi" target="_blank">github.com/lab240/napi-avahi</a>.
@@ -124,13 +131,20 @@ function render() {
   tb.replaceChildren();
   if (!rows.length) {
     const tr = tb.insertRow(), td = tr.insertCell();
-    td.colSpan = 8; td.className = "empty";
+    td.colSpan = 9; td.className = "empty";
     td.textContent = hadSearch ? (lastRaw ? "Никто не ответил на порту 22."
       : "NAPI не найдены. На платах нужен сервис napi-avahi (apt install napi-avahi, см. Help); платы без него найдёт «Сырой поиск».")
       : "Плат пока нет";
   }
   rows.forEach((r, i) => {
     const tr = tb.insertRow();
+    const fx = tr.insertCell(), cb = document.createElement("input"), nm = document.createElement("b");
+    fx.className = "fx"; cb.type = "checkbox"; cb.checked = !!r.Fixed; nm.textContent = r.Fixed || "";
+    cb.title = r.Fixed ? "Снять отметку" : "Отметить и дать своё имя";
+    cb.onclick = e => { e.stopPropagation(); e.preventDefault(); r.Fixed ? unfix(i) : rename(i); };
+    nm.ondblclick = e => { e.stopPropagation(); rename(i); };
+    nm.title = "Двойной щелчок: переименовать";
+    fx.append(cb, nm);
     for (const v of [r.Name, r.IP, r.Model, r.SoC, r.OS, r.Role, r.MAC, r.Signs]) tr.insertCell().textContent = v || "";
     tr.className = (r.Kind || "") + (i === sel ? " sel" : "");
     tr.onclick = () => { sel = i; render(); };
@@ -140,6 +154,27 @@ function render() {
 }
 
 function ip(r) { return (r.IP || "").split(",")[0].trim(); }
+
+// "fix": the user's own name for a board, kept on this computer
+async function rename(i) {
+  const r = rows[i], def = r.Fixed || (r.Name || "").replace(/\.local$/, "") || ip(r);
+  const name = prompt(`Своё имя для ${ip(r)}${r.Name ? " (" + r.Name + ")" : ""}:`, def);
+  if (name === null || !name.trim()) return;
+  await setFix(i, name.trim(), `«${name.trim()}»: отмечена, будет первой в списке`);
+}
+async function unfix(i) {
+  if (!confirm(`Снять отметку «${rows[i].Fixed}»?`)) return;
+  await setFix(i, "", "Отметка снята");
+}
+async function setFix(i, name, msg) {
+  try {
+    await api(`fix?i=${i}&name=${encodeURIComponent(name)}`, true);
+    const s = await api("state");
+    const keep = sel >= 0 ? ip(rows[sel]) : "";
+    rows = s.rows || []; sel = rows.findIndex(r => ip(r) === keep);
+    render(); status(msg);
+  } catch (e) { status("Отметка: " + e.message); }
+}
 
 function buttons() {
   const on = !busy && sel >= 0;

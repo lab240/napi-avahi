@@ -32,6 +32,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"github.com/lab240/napi-avahi/internal/cli"
+	"github.com/lab240/napi-avahi/internal/fixed"
 	"github.com/lab240/napi-avahi/internal/napifind"
 )
 
@@ -50,6 +51,7 @@ var (
 	pDispatchMessage       = user32.NewProc("DispatchMessageW")
 	pPostQuitMessage       = user32.NewProc("PostQuitMessage")
 	pPostMessage           = user32.NewProc("PostMessageW")
+	pSetFocus              = user32.NewProc("SetFocus")
 	pSendMessage           = user32.NewProc("SendMessageW")
 	pMoveWindow            = user32.NewProc("MoveWindow")
 	pLoadCursor            = user32.NewProc("LoadCursorW")
@@ -119,6 +121,15 @@ const (
 	nmDblClk         = ^uint32(2)   // NM_DBLCLK = -3
 	nmCustomDraw     = ^uint32(11)  // NM_CUSTOMDRAW = -12
 	lvnKeyDown       = ^uint32(154) // LVN_KEYDOWN = -155
+	lvnItemChanged   = ^uint32(100) // LVN_ITEMCHANGED = -101
+	lvnEndLabelEdit  = ^uint32(175) // LVN_ENDLABELEDITW = -176
+	lvsEditLabels    = 0x0200
+	lvsExCheckBoxes  = 0x0004
+	lvmSetItemState  = 0x102B
+	lvmEditLabel     = 0x1076 // LVM_EDITLABELW
+	lvisStateImage   = 0xF000
+	wmAppEdit        = 0x8001 // start editing the name of a row just checked
+	wmAppRefresh     = 0x8002 // the marks changed: the table again
 
 	idFind  = 101
 	idWeb   = 110 // + index in webs
@@ -189,20 +200,31 @@ type nmhdr struct {
 	code uint32
 }
 
-// One line of the table: the IP for the buttons and the cells.
+// One line of the table: the found row, the IP for the buttons and the cells.
 type row struct {
+	fixed.Row
 	ip    string
 	cells []string
-	kind  int // the row colour: kindAvahi, kindRaw (NAPI? of the raw search), 0
+	kind  int // the row colour: kindAvahi, kindRaw (NAPI? of the raw search), kindGone (marked, not found), 0
 }
 
 const (
 	kindAvahi = 1
 	kindRaw   = 2
+	kindGone  = 3
 )
 
 // Row backgrounds (COLORREF 0x00BBGGRR): napi-avahi light green, NAPI? of the raw search light amber.
 var kindColor = map[int]uint32{kindAvahi: 0x00DEF3E8, kindRaw: 0x00D0F3FD}
+
+func makeRows(list []fixed.Row) []row {
+	out := make([]row, 0, len(list))
+	for _, r := range list {
+		k := map[string]int{"avahi": kindAvahi, "raw": kindRaw, "gone": kindGone}[r.Kind]
+		out = append(out, row{r, r.FirstIP(), []string{r.Fixed, r.Name, r.IP, r.Model, r.SoC, r.OS, r.Role, r.MAC, r.Signs}, k})
+	}
+	return out
+}
 
 var (
 	hwndSSH, hwndCOM, hwndAbout uintptr
@@ -217,7 +239,9 @@ var (
 	logText                                                                              string
 	hwndWeb                                                                              []uintptr
 	rows                                                                                 []row
-	result                                                                               chan []row
+	found                                                                                []fixed.Row // as found: the table again after a mark
+	filling                                                                              bool        // show() fills the list: its LVN_ITEMCHANGED are ours
+	result                                                                               chan []fixed.Row
 	findErr                                                                              error
 	dpi                                                                                  = 96
 
@@ -328,13 +352,13 @@ func window() {
 	mono, _, _ := pCreateFont.Call(uintptr(-px(13)), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, uintptr(unsafe.Pointer(u16("Consolas"))))
 	send(hwndLog, wmSetFont, mono, 1)
 	hwndList, _, _ = pCreateWindowEx.Call(wsExClientEdge, uintptr(unsafe.Pointer(u16("SysListView32"))), 0,
-		wsChild|wsVisible|wsTabStop|lvsReport|lvsSingleSel|lvsShowSelAlways, 0, 0, 10, 10, hwndMain, idList, inst, 0)
+		wsChild|wsVisible|wsTabStop|lvsReport|lvsSingleSel|lvsShowSelAlways|lvsEditLabels, 0, 0, 10, 10, hwndMain, idList, inst, 0)
 	send(hwndList, wmSetFont, font, 1)
-	send(hwndList, lvmSetExStyle, 0, lvsExFullRow|lvsExGrid)
+	send(hwndList, lvmSetExStyle, 0, lvsExFullRow|lvsExGrid|lvsExCheckBoxes)
 	for i, c := range []struct {
 		name string
 		w    int
-	}{{"Имя", 160}, {"IP", 115}, {"Модель", 80}, {"SoC", 70}, {"ОС", 205}, {"Роль", 90}, {"MAC", 125}, {"Признаки", 300}} {
+	}{{"Моё имя", 150}, {"Имя", 160}, {"IP", 115}, {"Модель", 80}, {"SoC", 70}, {"ОС", 205}, {"Роль", 90}, {"MAC", 125}, {"Признаки", 300}} {
 		col := lvColumn{mask: lvcfText | lvcfWidth, cx: int32(px(c.w)), text: u16(c.name)}
 		send(hwndList, lvmInsertColumn, uintptr(i), uintptr(unsafe.Pointer(&col)))
 	}
@@ -414,8 +438,8 @@ func find(raw bool) {
 		return
 	}
 	setBusy(true, raw)
-	result = make(chan []row, 1)
-	go func(ch chan []row) {
+	result = make(chan []fixed.Row, 1)
+	go func(ch chan []fixed.Row) {
 		var (
 			lg  strings.Builder
 			lmu sync.Mutex
@@ -426,48 +450,16 @@ func find(raw bool) {
 			fmt.Fprintf(&lg, "%5.2fs  "+f+"\r\n", append([]any{time.Since(t0).Seconds()}, a...)...)
 			lmu.Unlock()
 		}
-		var out []row
-		var err error
-		if raw {
-			var hosts []napifind.Host
-			hosts, err = napifind.Scan(func(done, total int) {
-				scanDone.Store(int32(done))
-				scanTotal.Store(int32(total))
-			})
-			for _, h := range hosts {
-				name, model, soc, osn, role := h.Name, "", "", h.SSH, ""
-				if b := h.Board; b != nil {
-					model, soc, osn, role = b.TXT["model"], b.TXT["soc"], b.TXT["os"], b.TXT["role"]
-				}
-				signs := h.Verdict
-				if len(h.Signs) > 0 {
-					signs += ": " + strings.Join(h.Signs, " ")
-				}
-				kind := 0
-				if h.Board != nil {
-					kind = kindAvahi
-				} else if h.Verdict == "NAPI?" {
-					kind = kindRaw
-				}
-				out = append(out, row{h.IP, []string{name, h.IP, model, soc, osn, role, h.MAC, signs}, kind})
-			}
-		} else {
-			var list []napifind.Board
-			list, err = napifind.Find(3 * time.Second)
-			for _, b := range list {
-				t := b.TXT
-				ip := b.Host
-				if len(b.IP) > 0 {
-					ip = b.IP[0]
-				}
-				out = append(out, row{ip, []string{b.Host, strings.Join(b.IP, ", "), t["model"], t["soc"], t["os"], t["role"], t["mac"], "napi-avahi"}, kindAvahi})
-			}
-		}
+		list, err := fixed.Search(raw, func(done, total int) {
+			scanDone.Store(int32(done))
+			scanTotal.Store(int32(total))
+		})
+		out := list
 		napifind.Log = nil
 		lmu.Lock()
 		fmt.Fprintf(&lg, "найдено: %d\r\n", len(out))
 		for _, r := range out {
-			fmt.Fprintf(&lg, "  %s %s %s\r\n", r.cells[0], r.cells[1], r.cells[7])
+			fmt.Fprintf(&lg, "  %s %s %s\r\n", r.Name, r.IP, r.Signs)
 		}
 		if err != nil {
 			fmt.Fprintf(&lg, "ошибка: %v\r\n", err)
@@ -546,10 +538,34 @@ func actions() {
 	pEnableWindow.Call(hwndLogBtn, b2u(!busy && logText != ""))
 }
 
-func show(list []row) {
-	rows = list
+func show(f []fixed.Row) {
+	found = f
+	list := makeRows(fixed.Annotate(f))
 	setBusy(false, false)
 	pSetWindowText.Call(hwndLog, uintptr(unsafe.Pointer(u16(logText))))
+	fill(list)
+	switch {
+	case findErr != nil:
+		status("Ошибка: " + findErr.Error())
+	case len(list) == 0 && rawSearch:
+		status("Никто не ответил на порту 22.")
+	case len(list) == 0:
+		status("NAPI не найдены. На платах нужен сервис napi-avahi (apt install napi-avahi, см. «Help»); платы без него найдёт «Сырой поиск».")
+	default:
+		selectRow(0)
+		if rawSearch {
+			status("На порту 22: " + strconv.Itoa(len(list)) + ". «NAPI?»: Linux с признаками NAPI, но без napi-avahi.")
+		} else {
+			status("Найдено: " + strconv.Itoa(len(list)) + ". Двойной щелчок: SSH; Ctrl+C копирует IP.")
+		}
+	}
+}
+
+// fill puts the rows into the list, with the checkbox of the marked ones.
+func fill(list []row) {
+	filling = true
+	defer func() { filling = false }()
+	rows = list
 	send(hwndList, lvmDeleteAll, 0, 0)
 	for i, r := range list {
 		cells := r.cells
@@ -559,23 +575,101 @@ func show(list []row) {
 			it := lvItem{subItem: int32(c), text: u16(cells[c])}
 			send(hwndList, lvmSetItemText, uintptr(i), uintptr(unsafe.Pointer(&it)))
 		}
+		st := uint32(0x1000) // INDEXTOSTATEIMAGEMASK(1): unchecked
+		if r.Fixed != "" {
+			st = 0x2000
+		}
+		ck := lvItem{state: st, stateMask: lvisStateImage}
+		send(hwndList, lvmSetItemState, uintptr(i), uintptr(unsafe.Pointer(&ck)))
 	}
-	switch {
-	case findErr != nil:
-		status("Ошибка: " + findErr.Error())
-	case len(list) == 0 && rawSearch:
-		status("Никто не ответил на порту 22.")
-	case len(list) == 0:
-		status("NAPI не найдены. На платах нужен сервис napi-avahi (apt install napi-avahi, см. «Help»); платы без него найдёт «Сырой поиск».")
-	default:
-		sel := lvItem{state: 0x3, stateMask: 0x3}                // the first row: selected and focused
-		send(hwndList, 0x102B, 0, uintptr(unsafe.Pointer(&sel))) // LVM_SETITEMSTATE
-		if rawSearch {
-			status("На порту 22: " + strconv.Itoa(len(list)) + ". «NAPI?»: Linux с признаками NAPI, но без napi-avahi.")
-		} else {
-			status("Найдено: " + strconv.Itoa(len(list)) + ". Двойной щелчок: SSH; Ctrl+C копирует IP.")
+	actions()
+}
+
+func selectRow(i int) {
+	if i < 0 || i >= len(rows) {
+		return
+	}
+	sel := lvItem{state: 0x3, stateMask: 0x3} // selected and focused
+	send(hwndList, lvmSetItemState, uintptr(i), uintptr(unsafe.Pointer(&sel)))
+	send(hwndList, 0x1013, uintptr(i), 0) // LVM_ENSUREVISIBLE
+}
+
+// refresh: the table again after a mark, the same board selected.
+func refresh(keepIP string) {
+	fill(makeRows(fixed.Annotate(found)))
+	for i, r := range rows {
+		if r.ip == keepIP {
+			selectRow(i)
+			return
 		}
 	}
+}
+
+// LVN_ITEMCHANGED (NMLISTVIEW: iItem at 24, uNewState 32, uOldState 36, uChanged 40): a checkbox.
+// Checked: edit the name in place; unchecked: drop the mark.
+func checkChanged(lp uintptr) {
+	if filling || busy {
+		return
+	}
+	i := int(*(*int32)(unsafe.Pointer(lp + 24)))
+	nw, old, ch := *(*uint32)(unsafe.Pointer(lp + 32)), *(*uint32)(unsafe.Pointer(lp + 36)), *(*uint32)(unsafe.Pointer(lp + 40))
+	if ch&0x8 == 0 || (nw^old)&lvisStateImage == 0 || old&lvisStateImage == 0 || i < 0 || i >= len(rows) {
+		return
+	}
+	on := nw&lvisStateImage == 0x2000
+	r := rows[i]
+	switch {
+	case on && r.Fixed == "":
+		pPostMessage.Call(hwndMain, wmAppEdit, uintptr(i), 0) // not inside the notification
+	case !on && r.Fixed != "":
+		if err := fixed.SetName(r.Row, ""); err != nil {
+			status("Отметка: " + err.Error())
+		} else {
+			status("Отметка «" + r.Fixed + "» снята")
+		}
+		pPostMessage.Call(hwndMain, wmAppRefresh, 0, 0)
+	}
+}
+
+// editName: the name cell of row i becomes an edit box (the label of the item).
+func editName(i int) {
+	if i < 0 || i >= len(rows) || busy {
+		return
+	}
+	if rows[i].Fixed == "" { // a suggestion: the network name without .local, else the IP
+		def := strings.TrimSuffix(rows[i].Name, ".local")
+		if def == "" {
+			def = rows[i].ip
+		}
+		it := lvItem{subItem: 0, text: u16(def)}
+		send(hwndList, lvmSetItemText, uintptr(i), uintptr(unsafe.Pointer(&it)))
+	}
+	pSetFocus.Call(hwndList)
+	send(hwndList, lvmEditLabel, uintptr(i), 0)
+	status("Своё имя платы: Enter сохраняет, Esc отменяет, пустое имя снимает отметку.")
+}
+
+// LVN_ENDLABELEDITW (NMLVDISPINFOW: the LVITEMW at 24, iItem at 28, pszText at 48): nil is Esc.
+func nameEdited(lp uintptr) {
+	i := int(*(*int32)(unsafe.Pointer(lp + 28)))
+	p := *(**uint16)(unsafe.Pointer(lp + 48))
+	if i < 0 || i >= len(rows) {
+		return
+	}
+	r := rows[i]
+	if p != nil {
+		name := strings.TrimSpace(windows.UTF16PtrToString(p))
+		if err := fixed.SetName(r.Row, name); err != nil {
+			status("Отметка: " + err.Error())
+		} else if name == "" {
+			status("Отметка снята")
+		} else {
+			status("«" + name + "»: отмечена, будет первой в списке")
+		}
+	} else {
+		status("")
+	}
+	pPostMessage.Call(hwndMain, wmAppRefresh, 0, 0)
 }
 
 // NM_CUSTOMDRAW of the list: the background of a row by its kind. NMLVCUSTOMDRAW on amd64:
@@ -587,6 +681,10 @@ func rowColor(lp uintptr) uintptr {
 	case 0x10001: // CDDS_ITEMPREPAINT
 		i := int(*(*uintptr)(unsafe.Pointer(lp + 56)))
 		if i >= 0 && i < len(rows) {
+			if rows[i].kind == kindGone {
+				*(*uint32)(unsafe.Pointer(lp + 80)) = 0x00808080 // gray text
+				return 0x2
+			}
 			if c, ok := kindColor[rows[i].kind]; ok {
 				*(*uint32)(unsafe.Pointer(lp + 84)) = c
 				return 0x2 // CDRF_NEWFONT: use the colours
@@ -698,6 +796,8 @@ const helpText = `Поиск плат NAPI в сети, SSH и консоль UA
 
 «Искать»: платы с сервисом napi-avahi. «Сырой поиск»: всё, что отвечает на порту 22, с признаками NAPI (для плат без napi-avahi). «Консоль»: UART платы через USB-переходник, 1500000 8N1, выход Ctrl+]. napiconfig, SSH, influxdb, grafana, donoff: выбранная в таблице плата; двойной щелчок по строке: SSH, Ctrl+C: копировать IP. Зелёные строки найдены через napi-avahi, жёлтые: «NAPI?» сырого поиска.
 
+Галочка «Моё имя»: дайте плате своё имя. Отмеченные платы идут первыми, «Искать» проверяет их и без napi-avahi; плата узнаётся по ключу SSH и MAC, даже если сменился IP или имя в сети. Не найденная плата остаётся серой строкой внизу. F2: переименовать. Список хранится на этом компьютере: %APPDATA%\napi-discover\boards.json.
+
 Чтобы плата находилась кнопкой «Искать», на ней должен стоять сервис napi-avahi:
     apt install napi-avahi
 из репозитория napilab: <a href="https://repo.napilab.ru">repo.napilab.ru</a>
@@ -791,6 +891,16 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 		default:
 		}
 		return 0
+	case wmAppEdit:
+		editName(int(wp))
+		return 0
+	case wmAppRefresh:
+		keep := ""
+		if b := selected(); b != nil {
+			keep = b.ip
+		}
+		refresh(keep)
+		return 0
 	case wmCommand:
 		switch wp & 0xffff {
 		case idFind:
@@ -823,6 +933,9 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 			}
 		case lvnKeyDown: // NMLVKEYDOWN: wVKey after the header
 			key := *(*uint16)(unsafe.Pointer(lp + unsafe.Sizeof(nmhdr{})))
+			if key == 0x71 { // F2: rename
+				editName(int(int32(send(hwndList, lvmGetNextItem, ^uintptr(0), lvniSelected))))
+			}
 			if ctrl, _, _ := pGetKeyState.Call(0x11); key == 'C' && int16(ctrl) < 0 {
 				if b := selected(); b != nil && copyText(b.ip) {
 					status("Скопировано: " + b.ip)
@@ -830,6 +943,10 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 			}
 		case nmCustomDraw:
 			return rowColor(lp)
+		case lvnItemChanged:
+			checkChanged(lp)
+		case lvnEndLabelEdit:
+			nameEdited(lp)
 		}
 		return 0
 	case wmDestroy:

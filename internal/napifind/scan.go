@@ -132,6 +132,42 @@ func Scan(progress func(done, total int)) ([]Host, error) {
 	return out, nil
 }
 
+// Probe checks the given addresses as the raw search does (no napi-avahi): for the marked boards
+// at their last IP.
+func Probe(ips []string) []Host {
+	var (
+		mu    sync.Mutex
+		hosts []*Host
+		wg    sync.WaitGroup
+	)
+	for _, ip := range ips {
+		wg.Add(1)
+		go func(ip string) {
+			defer wg.Done()
+			if h := probe(ip); h != nil {
+				mu.Lock()
+				hosts = append(hosts, h)
+				mu.Unlock()
+			}
+		}(ip)
+	}
+	wg.Wait()
+	if len(hosts) == 0 {
+		return nil
+	}
+	names := reverseNames(hosts)
+	arp := arpTable()
+	out := make([]Host, 0, len(hosts))
+	for _, h := range hosts {
+		h.MAC, h.Name = arp[h.IP], names[h.IP]
+		judge(h)
+		logf("marked board at %s: %s ssh=%q mac=%s: %s", h.IP, h.Name, h.SSH, h.MAC, h.Verdict)
+		out = append(out, *h)
+	}
+	sort.Slice(out, func(i, j int) bool { return ipLess(out[i].IP, out[j].IP) })
+	return out
+}
+
 // TCP 22, the SSH banner, then the NAPI ports.
 func probe(ip string) *Host {
 	c, err := net.DialTimeout("tcp4", net.JoinHostPort(ip, "22"), 800*time.Millisecond)

@@ -32,8 +32,12 @@ import (
 	"time"
 
 	"github.com/lab240/napi-avahi/internal/cli"
+	"github.com/lab240/napi-avahi/internal/fixed"
 	"github.com/lab240/napi-avahi/internal/napifind"
 )
+
+// One line of the table (the marked boards: Fixed, Entry; "gone" ones at the end).
+type row = fixed.Row
 
 var version = "dev" // make tools: -X main.version=<VERSION>
 
@@ -55,12 +59,6 @@ func main() {
 	}
 }
 
-// One line of the table.
-type row struct {
-	Name, IP, Model, SoC, OS, Role, MAC, Signs string
-	Kind                                       string // the row colour: "avahi", "raw" (NAPI? of the raw search), ""
-}
-
 // The search state the page polls.
 type state struct {
 	Busy  bool   `json:"busy"`
@@ -68,7 +66,8 @@ type state struct {
 	Done  int32  `json:"done"`
 	Total int32  `json:"total"`
 	Since int64  `json:"since"` // ms since the start
-	Rows  []row  `json:"rows"`
+	Rows  []row  `json:"rows"`  // as shown: the marked boards first
+	found []row  // as found: Rows again after a mark
 	Log   string `json:"log"`
 	Err   string `json:"err"`
 }
@@ -147,6 +146,21 @@ func serve() error {
 		script := `printf 'login: '; read L; [ -n "$L" ] && exec ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$L@` + ip + `"; ` + pause
 		reply(w, terminal("NAPI "+ip, "sh", "-c", script))
 	})
+	// "fix": mark the row i with a name, rename it, or ("") unmark it
+	api("fix", true, func(w http.ResponseWriter, r *http.Request) {
+		i, err := strconv.Atoi(r.URL.Query().Get("i"))
+		mu.Lock()
+		defer mu.Unlock()
+		if err != nil || i < 0 || i >= len(st.Rows) || st.Busy {
+			http.Error(w, "нет такой строки", http.StatusBadRequest)
+			return
+		}
+		if err := fixed.SetName(st.Rows[i], r.URL.Query().Get("name")); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		st.Rows = fixed.Annotate(st.found)
+	})
 	api("ports", false, func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"ports": serialPorts(), "dialout": inDialout()})
 	})
@@ -223,7 +237,7 @@ func search(raw bool) bool {
 		mu.Unlock()
 		return false
 	}
-	st = state{Busy: true, Raw: raw, Rows: st.Rows}
+	st = state{Busy: true, Raw: raw, Rows: st.Rows, found: st.found}
 	started = time.Now()
 	done.Store(0)
 	total.Store(0)
@@ -238,40 +252,15 @@ func search(raw bool) bool {
 			fmt.Fprintf(&lg, "%5.2fs  "+f+"\n", append([]any{time.Since(t0).Seconds()}, a...)...)
 			lmu.Unlock()
 		}
-		var rows []row
-		var err error
-		if raw {
-			var hosts []napifind.Host
-			hosts, err = napifind.Scan(func(d, t int) { done.Store(int32(d)); total.Store(int32(t)) })
-			for _, h := range hosts {
-				r := row{Name: h.Name, IP: h.IP, OS: h.SSH, MAC: h.MAC, Signs: h.Verdict}
-				if b := h.Board; b != nil {
-					r.Model, r.SoC, r.OS, r.Role = b.TXT["model"], b.TXT["soc"], b.TXT["os"], b.TXT["role"]
-					r.Kind = "avahi"
-				} else if h.Verdict == "NAPI?" {
-					r.Kind = "raw"
-				}
-				if len(h.Signs) > 0 {
-					r.Signs += ": " + strings.Join(h.Signs, " ")
-				}
-				rows = append(rows, r)
-			}
-		} else {
-			var list []napifind.Board
-			list, err = napifind.Find(3 * time.Second)
-			for _, b := range list {
-				t := b.TXT
-				rows = append(rows, row{Name: b.Host, IP: strings.Join(b.IP, ", "), Model: t["model"], SoC: t["soc"],
-					OS: t["os"], Role: t["role"], MAC: t["mac"], Signs: "napi-avahi", Kind: "avahi"})
-			}
-		}
+		found, err := fixed.Search(raw, func(d, t int) { done.Store(int32(d)); total.Store(int32(t)) })
+		rows := fixed.Annotate(found)
 		napifind.Log = nil
 		lmu.Lock()
-		fmt.Fprintf(&lg, "найдено: %d\n", len(rows))
+		fmt.Fprintf(&lg, "найдено: %d\n", len(found))
 		log := lg.String()
 		lmu.Unlock()
 		mu.Lock()
-		st = state{Raw: raw, Rows: rows, Log: log}
+		st = state{Raw: raw, Rows: rows, found: found, Log: log}
 		if err != nil {
 			st.Err = err.Error()
 		}

@@ -44,7 +44,7 @@ apt update && apt install napi-avahi
 Архив `napi-avahi-<версия>.tar.gz` (`make tar`): скопировать на плату и под root
 
 ```sh
-tar xzf napi-avahi-0.1.2.tar.gz && cd napi-avahi-0.1.2 && sh install.sh
+tar xzf napi-avahi-0.1.3.tar.gz && cd napi-avahi-0.1.3 && sh install.sh
 ```
 
 В образе должен быть `avahi-daemon` (`avahi-utils` желателен: без него новое имя применяется
@@ -81,6 +81,13 @@ napi-avahi list                 # все NAPI в сети
 - «Консоль ▾»: COM-порты (`/dev/ttyUSB*`, `/dev/ttyACM*`) с названием переходника и скорость
   (1500000, отладочный UART RK3308/RK3568, или 115200); консоль платы 8N1, выход Ctrl+].
   В Linux пользователь должен быть в группе `dialout`.
+- Галочка «Моё имя»: своё имя для платы (например «котельная»). Отмеченные платы идут первыми;
+  «Искать» проверяет их по последнему IP и без napi-avahi. Плата узнаётся по ключу SSH хоста и MAC
+  (MAC у двух NAPI-C бывает одинаковым, ключ нет; после перепрошивки ключ новый, тогда по MAC),
+  поэтому смена IP или имени в сети (`napic.local`, `napic-2.local`) не мешает. Не найденная сейчас
+  плата остаётся серой строкой внизу. Переименовать: F2 (Windows), двойной щелчок по имени (Linux).
+  Список хранится на компьютере: `%APPDATA%\napi-discover\boards.json`, `~/.config/napi-discover/boards.json`;
+  в консоли `napi-discover --fix <IP> <имя>`, `--unfix <IP|имя>`.
 - «Журнал»: что делал последний поиск. «Help»: ссылки, лицензия.
 - Командная строка: `napi-discover --console` (`-v` журнал, `-t 5s` слушать дольше, `--raw` сырой
   поиск), `napi-discover --serial COM7` или `--serial /dev/ttyUSB0` (`--baud 115200`).
