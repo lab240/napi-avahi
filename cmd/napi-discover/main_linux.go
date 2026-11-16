@@ -161,6 +161,22 @@ func serve() error {
 		}
 		st.Rows = fixed.Annotate(st.found)
 	})
+	// the model or the SoC of a marked row i, for a board without napi-avahi
+	api("info", true, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		i, err := strconv.Atoi(q.Get("i"))
+		mu.Lock()
+		defer mu.Unlock()
+		if err != nil || i < 0 || i >= len(st.Rows) || st.Busy {
+			http.Error(w, "нет такой строки", http.StatusBadRequest)
+			return
+		}
+		if err := fixed.SetInfo(st.Rows[i], q.Get("field"), q.Get("value")); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		st.Rows = fixed.Annotate(st.found)
+	})
 	api("ports", false, func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"ports": serialPorts(), "dialout": inDialout()})
 	})

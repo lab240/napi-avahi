@@ -2,6 +2,7 @@ package fixed
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -54,5 +55,50 @@ func TestFixSaveLoad(t *testing.T) {
 	}
 	if es = Fix(got, r, "", now); len(es) != 0 {
 		t.Fatalf("not removed: %+v", es)
+	}
+}
+
+func TestAnnotateOrderAndInfo(t *testing.T) {
+	dir := t.TempDir()
+	Path = func() string { return filepath.Join(dir, "boards.json") }
+	found := []Row{
+		{Name: "pc.local", IP: "10.0.0.9", Key: "PC", Signs: "Linux: linux"},
+		{Name: "napic.local", IP: "10.0.0.7", Key: "K7", Kind: "raw", Signs: "NAPI?: avahi"},
+		{Name: "napi3308.local", IP: "10.0.0.20", Key: "K20", Kind: "avahi", Model: "Napi C"},
+		{Name: "napic-2.local", IP: "10.0.0.5", Key: "K5", Kind: "raw", Signs: "NAPI?: avahi"},
+	}
+	if err := SetName(found[1], "котельная"); err != nil {
+		t.Fatal(err)
+	}
+	out := Annotate(found)
+	var ips []string
+	for _, r := range out {
+		ips = append(ips, r.IP)
+	}
+	want := "10.0.0.7 10.0.0.20 10.0.0.5 10.0.0.9"
+	if got := strings.Join(ips, " "); got != want {
+		t.Fatalf("order %s, want %s", got, want)
+	}
+	if err := SetInfo(out[0], "model", " Napi C (Classic) "); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetInfo(out[0], "soc", "rk3308"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetInfo(out[1], "soc", "x"); err == nil {
+		t.Fatal("SetInfo on an unmarked row")
+	}
+	out = Annotate(found)
+	if out[0].Model != "Napi C (Classic)" || out[0].SoC != "rk3308" {
+		t.Fatalf("%+v", out[0])
+	}
+	// renamed: the model stays; not found: the gone row has it too
+	if err := SetName(out[0], "щит"); err != nil {
+		t.Fatal(err)
+	}
+	out = Annotate(found[2:])
+	last := out[len(out)-1]
+	if last.Kind != "gone" || last.Fixed != "щит" || last.Model != "Napi C (Classic)" {
+		t.Fatalf("%+v", last)
 	}
 }

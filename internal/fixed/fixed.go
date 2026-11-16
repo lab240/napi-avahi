@@ -18,12 +18,15 @@ import (
 )
 
 type Entry struct {
-	Name string    `json:"name"` // the user's name: "котельная"
-	MAC  string    `json:"mac,omitempty"`
-	Key  string    `json:"key,omitempty"`  // SHA256:... of the SSH host key
-	IP   string    `json:"ip,omitempty"`   // the last one seen
-	Host string    `json:"host,omitempty"` // the last network name seen
-	Seen time.Time `json:"seen,omitempty"`
+	Name string `json:"name"` // the user's name: "котельная"
+	MAC  string `json:"mac,omitempty"`
+	Key  string `json:"key,omitempty"`  // SHA256:... of the SSH host key
+	IP   string `json:"ip,omitempty"`   // the last one seen
+	Host string `json:"host,omitempty"` // the last network name seen
+	// set by the user for a board without napi-avahi (with it, its TXT wins)
+	Model string    `json:"model,omitempty"`
+	SoC   string    `json:"soc,omitempty"`
+	Seen  time.Time `json:"seen,omitempty"`
 }
 
 // Found is one row of a search, as far as matching goes.

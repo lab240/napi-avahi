@@ -54,6 +54,7 @@ tbody tr.gone { color: var(--muted); }
 td.fx { padding-left: 6px; }
 td.fx input { vertical-align: -2px; margin: 0 6px 0 0; cursor: pointer; accent-color: var(--accent); }
 td.fx b { font-weight: 600; cursor: text; }
+td.own { cursor: text; }
 tbody tr.sel { background: var(--sel); color: var(--sel-text); box-shadow: inset 3px 0 0 var(--accent); }
 td.empty { color: var(--muted); text-align: center; padding: 30px; white-space: normal; }
 #log { display: none; margin-top: 8px; max-height: 220px; overflow: auto; background: var(--panel); border: 1px solid var(--line);
@@ -86,7 +87,7 @@ dialog form { text-align: right; margin-top: 10px; }
   <button id="logBtn" disabled>Журнал</button>
   <button id="helpBtn">Help</button>
 </header>
-<div id="bar"><div id="prog"><div></div></div><span id="status">Нажмите «Искать» (платы с napi-avahi) или «Сырой поиск» (всё, что отвечает на порту 22).</span></div>
+<div id="bar"><div id="prog"><div></div></div><span id="status">Нажмите «Искать» (платы с avahi) или «Сырой поиск» (всё, что отвечает на порту 22).</span></div>
 <main>
   <div class="wrap"><table>
     <thead><tr><th title="Отметьте плату и дайте ей своё имя: она будет первой в списке и узнается, даже если сменит IP или имя в сети">Моё имя</th><th>Имя</th><th>IP</th><th>Модель</th><th>SoC</th><th>ОС</th><th>Роль</th><th>MAC</th><th>Признаки</th></tr></thead>
@@ -98,13 +99,13 @@ dialog form { text-align: right; margin-top: 10px; }
 <dialog id="help">
   <h2><img src="napi.svg" alt=""> napi-discover <span id="ver"></span></h2>
   <p>Поиск плат NAPI в сети, SSH и консоль UART.</p>
-  <p>«Искать»: платы с сервисом napi-avahi. «Сырой поиск»: всё, что отвечает на порту 22, с признаками NAPI (для плат без napi-avahi).
+  <p>«Искать»: платы с avahi: с сервисом napi-avahi (модель, SoC, роль) и с голым avahi в прошивке (проверяются по SSH, показываются только «NAPI?»). «Сырой поиск»: всё на порту 22, кроме Windows и MikroTik, для плат совсем без avahi; NAPI всегда сверху.
     «Консоль»: UART платы через USB-переходник, 1500000 8N1, выход Ctrl+]. napiconfig, SSH, influxdb, grafana, donoff: выбранная в таблице плата;
-    двойной щелчок по строке: SSH, Ctrl+C: копировать IP. Зелёные строки найдены через napi-avahi, жёлтые: «NAPI?» сырого поиска.</p>
-  <p>Галочка «Моё имя»: дайте плате своё имя. Отмеченные платы идут первыми, «Искать» проверяет их и без napi-avahi,
+    двойной щелчок по строке: SSH, Ctrl+C: копировать IP. Зелёные строки: napi-avahi, жёлтые: «NAPI?» (голый avahi или сырой поиск).</p>
+  <p>Галочка «Моё имя»: дайте плате своё имя. Отмеченные платы идут первыми, «Искать» проверяет их и без avahi,
     плата узнаётся по ключу SSH и MAC, даже если сменился IP или имя в сети. Не найденная плата остаётся серой строкой внизу.
-    Двойной щелчок по имени: переименовать. Список хранится на этом компьютере: <code>~/.config/napi-discover/boards.json</code>.</p>
-  <p>Чтобы плата находилась кнопкой «Искать», на ней должен стоять сервис napi-avahi: <code>apt install napi-avahi</code>
+    Двойной щелчок по имени: переименовать. Модель и SoC отмеченной платы без napi-avahi: двойной щелчок по ячейке «Модель» или «SoC». Список хранится на этом компьютере: <code>~/.config/napi-discover/boards.json</code>.</p>
+  <p>Кнопка «Искать» находит плату, на которой работает avahi-daemon. Модель, SoC и роль в таблице даёт сервис napi-avahi: <code>apt install napi-avahi</code>
     из репозитория napilab: <a href="https://repo.napilab.ru" target="_blank">repo.napilab.ru</a>.
     Исходники и подключение репозитория: <a href="https://github.com/lab240/napi-avahi" target="_blank">github.com/lab240/napi-avahi</a>.
     Свежая версия программы: <a href="https://github.com/lab240/napi-avahi/releases/latest" target="_blank">github.com/lab240/napi-avahi/releases</a>.</p>
@@ -133,7 +134,7 @@ function render() {
     const tr = tb.insertRow(), td = tr.insertCell();
     td.colSpan = 9; td.className = "empty";
     td.textContent = hadSearch ? (lastRaw ? "Никто не ответил на порту 22."
-      : "NAPI не найдены. На платах нужен сервис napi-avahi (apt install napi-avahi, см. Help); платы без него найдёт «Сырой поиск».")
+      : "NAPI не найдены: никто не ответил по avahi. Платы без avahi найдёт «Сырой поиск».")
       : "Плат пока нет";
   }
   rows.forEach((r, i) => {
@@ -146,6 +147,12 @@ function render() {
     nm.title = "Двойной щелчок: переименовать";
     fx.append(cb, nm);
     for (const v of [r.Name, r.IP, r.Model, r.SoC, r.OS, r.Role, r.MAC, r.Signs]) tr.insertCell().textContent = v || "";
+    if (r.Fixed && r.Kind !== "avahi") // the model and the SoC of a marked board without napi-avahi
+      [["model", "Модель", 3], ["soc", "SoC", 4]].forEach(([f, what, c]) => {
+        const td = tr.cells[c];
+        td.className = "own"; td.title = "Двойной щелчок: задать " + what;
+        td.ondblclick = e => { e.stopPropagation(); setInfo(i, f, what); };
+      });
     tr.className = (r.Kind || "") + (i === sel ? " sel" : "");
     tr.onclick = () => { sel = i; render(); };
     tr.ondblclick = () => { sel = i; render(); $("#ssh").click(); };
@@ -165,6 +172,15 @@ async function rename(i) {
 async function unfix(i) {
   if (!confirm(`Снять отметку «${rows[i].Fixed}»?`)) return;
   await setFix(i, "", "Отметка снята");
+}
+async function setInfo(i, field, what) {
+  const r = rows[i], v = prompt(`${what} «${r.Fixed}» (пусто: стереть):`, (field === "model" ? r.Model : r.SoC) || "");
+  if (v === null) return;
+  try {
+    await api(`info?i=${i}&field=${field}&value=${encodeURIComponent(v.trim())}`, true);
+    const s = await api("state");
+    rows = s.rows || []; render(); status(`${what} «${r.Fixed}» сохранена`);
+  } catch (e) { status(what + ": " + e.message); }
 }
 async function setFix(i, name, msg) {
   try {
@@ -202,7 +218,7 @@ async function poll() {
       status(`Сырой поиск: проверяю порт 22 по всей подсети${dots}  ${s.done} из ${s.total}`);
     } else {
       pos = Math.min(s.since / 30, 100);
-      status((s.raw ? "Сырой поиск" : "Ищу NAPI (napi-avahi)") + dots);
+      status((s.raw ? "Сырой поиск" : "Ищу NAPI (avahi)") + dots);
     }
     $("#prog > div").style.width = pos + "%";
     setTimeout(poll, 150);

@@ -1,5 +1,7 @@
 // Package napifind finds the NAPI boards on the LAN: the mDNS service _napi._tcp that
-// the napi-avahi package announces, with its TXT fields (model, soc, os, role, mac).
+// the napi-avahi package announces, with its TXT fields (model, soc, os, role, mac), and the
+// hosts of bare avahi: every avahi tells its name by the address (the reverse PTR), even with
+// no service announced.
 //
 // It asks with "legacy unicast" mDNS queries (from an ordinary UDP port, not 5353), so it does not
 // fight the mDNS service of the system for the port: the answers come straight back to it.
@@ -11,6 +13,7 @@ package napifind
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"sort"
 	"strings"
@@ -47,9 +50,16 @@ func logf(format string, a ...any) {
 }
 
 func Find(wait time.Duration) ([]Board, error) {
+	b, _, err := FindAll(wait)
+	return b, err
+}
+
+// FindAll is Find, and also the mDNS names of all the hosts that answered the direct sweep by
+// IP: avahi without napi-avahi (and any other mDNS responder; SSH tells a NAPI from them).
+func FindAll(wait time.Duration) ([]Board, map[string]string, error) {
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer conn.Close()
 	// The sweep sends ~254 packets at once to addresses without an ARP entry yet; they wait in the
@@ -58,9 +68,10 @@ func Find(wait time.Duration) ([]Board, error) {
 	pc := ipv4.NewPacketConn(conn)
 	ifs := interfaces()
 	if len(ifs) == 0 {
-		return nil, errors.New("нет сетевых интерфейсов с IPv4")
+		return nil, nil, errors.New("нет сетевых интерфейсов с IPv4")
 	}
 
+	names := map[string]string{}   // IP -> mDNS name, from the reverse PTR
 	boards := map[string]*found{}  // by instance name
 	hosts := map[string][]string{} // host name -> IPv4
 	sweep := subnetHosts(ifs)
@@ -89,13 +100,12 @@ func Find(wait time.Duration) ([]Board, error) {
 		for _, a := range responders {
 			conn.WriteToUDP(b, a)
 		}
-		if round < 2 { // the direct sweep: the first question only, twice
-			ptr := pack(qs[:1])
+		if round < 2 { // the direct sweep: the first question and the name of the address, twice
 			fails := 0
 			var last error
 			for _, a := range sweep {
 				if responders[a.IP.String()] == nil {
-					if _, err := conn.WriteToUDP(ptr, a); err != nil {
+					if _, err := conn.WriteToUDP(pack([]dnsmessage.Question{qs[0], q(reverse(a.IP), dnsmessage.TypePTR)}), a); err != nil {
 						fails++
 						last = err
 					}
@@ -148,6 +158,11 @@ func Find(wait time.Duration) ([]Board, error) {
 		}
 		for _, rr := range append(append(m.Answers, m.Authorities...), m.Additionals...) {
 			take(rr, boards, hosts)
+			if ptr, ok := rr.Body.(*dnsmessage.PTRResource); ok {
+				if ip := unreverse(rr.Header.Name.String()); ip != "" {
+					names[ip] = strings.TrimSuffix(ptr.PTR.String(), ".")
+				}
+			}
 		}
 	}
 
@@ -164,7 +179,27 @@ func Find(wait time.Duration) ([]Board, error) {
 		list = append(list, Board{Host: host, IP: hosts[b.host], TXT: txt})
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Host < list[j].Host })
-	return list, nil
+	logf("names by IP (avahi): %d", len(names))
+	return list, names, nil
+}
+
+// reverse: 192.168.30.52 -> 52.30.168.192.in-addr.arpa.
+func reverse(ip net.IP) string {
+	p := ip.To4()
+	return fmt.Sprintf("%d.%d.%d.%d.in-addr.arpa.", p[3], p[2], p[1], p[0])
+}
+
+// unreverse: 52.30.168.192.in-addr.arpa. -> 192.168.30.52, "" for other names.
+func unreverse(name string) string {
+	f := strings.Split(strings.TrimSuffix(strings.ToLower(name), "."), ".")
+	if len(f) != 6 || f[4] != "in-addr" || f[5] != "arpa" {
+		return ""
+	}
+	ip := net.ParseIP(f[3] + "." + f[2] + "." + f[1] + "." + f[0])
+	if ip == nil {
+		return ""
+	}
+	return ip.String()
 }
 
 func take(rr dnsmessage.Resource, boards map[string]*found, hosts map[string][]string) {

@@ -134,7 +134,10 @@ func Scan(progress func(done, total int)) ([]Host, error) {
 
 // Probe checks the given addresses as the raw search does (no napi-avahi): for the marked boards
 // at their last IP.
-func Probe(ips []string) []Host {
+func Probe(ips []string) []Host { return ProbeNamed(ips, nil) }
+
+// ProbeNamed is Probe with the mDNS names already known (FindAll): no second question for them.
+func ProbeNamed(ips []string, known map[string]string) []Host {
 	var (
 		mu    sync.Mutex
 		hosts []*Host
@@ -155,13 +158,22 @@ func Probe(ips []string) []Host {
 	if len(hosts) == 0 {
 		return nil
 	}
-	names := reverseNames(hosts)
+	var ask []*Host
+	for _, h := range hosts {
+		if known[h.IP] == "" {
+			ask = append(ask, h)
+		}
+	}
+	names := reverseNames(ask)
 	arp := arpTable()
 	out := make([]Host, 0, len(hosts))
 	for _, h := range hosts {
-		h.MAC, h.Name = arp[h.IP], names[h.IP]
+		h.MAC, h.Name = arp[h.IP], known[h.IP]
+		if h.Name == "" {
+			h.Name = names[h.IP]
+		}
 		judge(h)
-		logf("marked board at %s: %s ssh=%q mac=%s: %s", h.IP, h.Name, h.SSH, h.MAC, h.Verdict)
+		logf("probe %s: %s ssh=%q mac=%s: %s", h.IP, h.Name, h.SSH, h.MAC, h.Verdict)
 		out = append(out, *h)
 	}
 	sort.Slice(out, func(i, j int) bool { return ipLess(out[i].IP, out[j].IP) })
@@ -258,8 +270,7 @@ func reverseNames(hosts []*Host) map[string]string {
 	defer conn.Close()
 	for _, h := range hosts {
 		p := net.ParseIP(h.IP).To4()
-		rev := fmt.Sprintf("%d.%d.%d.%d.in-addr.arpa.", p[3], p[2], p[1], p[0])
-		b, err := (&dnsmessage.Message{Questions: []dnsmessage.Question{q(rev, dnsmessage.TypePTR)}}).Pack()
+		b, err := (&dnsmessage.Message{Questions: []dnsmessage.Question{q(reverse(p), dnsmessage.TypePTR)}}).Pack()
 		if err == nil {
 			conn.WriteToUDP(b, &net.UDPAddr{IP: p, Port: 5353})
 		}
@@ -284,6 +295,9 @@ func reverseNames(hosts []*Host) map[string]string {
 	}
 	return names
 }
+
+// IPLess orders IPv4 addresses by number.
+func IPLess(a, b string) bool { return ipLess(a, b) }
 
 func ipLess(a, b string) bool {
 	x, y := net.ParseIP(a).To4(), net.ParseIP(b).To4()
