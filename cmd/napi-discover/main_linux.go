@@ -63,6 +63,7 @@ func main() {
 type state struct {
 	Busy  bool   `json:"busy"`
 	Raw   bool   `json:"raw"`
+	Known bool   `json:"known"` // the check of the marked boards at their last IP, at the start
 	Done  int32  `json:"done"`
 	Total int32  `json:"total"`
 	Since int64  `json:"since"` // ms since the start
@@ -132,7 +133,7 @@ func serve() error {
 		writeJSON(w, map[string]any{"version": version, "terminal": terminalName()})
 	})
 	api("search", true, func(w http.ResponseWriter, r *http.Request) {
-		if !search(r.URL.Query().Get("raw") == "1") {
+		if !search(r.URL.Query().Get("raw") == "1", false) {
 			http.Error(w, "поиск уже идёт", http.StatusConflict)
 		}
 	})
@@ -161,8 +162,8 @@ func serve() error {
 		}
 		st.Rows = fixed.Annotate(st.found)
 	})
-	// the model or the SoC of a marked row i, for a board without napi-avahi
-	api("setinfo", true, func(w http.ResponseWriter, r *http.Request) {
+	// "Изменить": the name, the model, the SoC, the role and the OS of the row i (marks it)
+	api("edit", true, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		i, err := strconv.Atoi(q.Get("i"))
 		mu.Lock()
@@ -171,7 +172,8 @@ func serve() error {
 			http.Error(w, "нет такой строки", http.StatusBadRequest)
 			return
 		}
-		if err := fixed.SetInfo(st.Rows[i], q.Get("field"), q.Get("value")); err != nil {
+		in := fixed.Info{Name: q.Get("name"), Model: q.Get("model"), SoC: q.Get("soc"), Role: q.Get("role"), OS: q.Get("os")}
+		if err := fixed.Edit(st.Rows[i], in); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -204,6 +206,10 @@ func serve() error {
 
 	fmt.Println("napi-discover:", url)
 	fmt.Println("Закройте страницу или нажмите Ctrl+C, чтобы выйти.")
+	if saved := fixed.Saved(); len(saved) > 0 { // the marked boards at once, as last seen; then checked
+		st.Rows = saved
+		search(false, true)
+	}
 	go openBrowser(url)
 	// The page says bye when closed; failing that (a crashed browser) exit when it has not polled
 	// for 10 s, or no page came within 2 minutes.
@@ -246,14 +252,15 @@ func known(ip string) bool {
 	return false
 }
 
-// search starts in the background; false when one is running already.
-func search(raw bool) bool {
+// search starts in the background (known: only the marked boards at their last IP); false when
+// one is running already.
+func search(raw, known bool) bool {
 	mu.Lock()
 	if st.Busy {
 		mu.Unlock()
 		return false
 	}
-	st = state{Busy: true, Raw: raw, Rows: st.Rows, found: st.found}
+	st = state{Busy: true, Raw: raw, Known: known, Rows: st.Rows, found: st.found}
 	started = time.Now()
 	done.Store(0)
 	total.Store(0)
@@ -268,7 +275,13 @@ func search(raw bool) bool {
 			fmt.Fprintf(&lg, "%5.2fs  "+f+"\n", append([]any{time.Since(t0).Seconds()}, a...)...)
 			lmu.Unlock()
 		}
-		found, err := fixed.Search(raw, func(d, t int) { done.Store(int32(d)); total.Store(int32(t)) })
+		var found []fixed.Row
+		var err error
+		if known {
+			found = fixed.Known()
+		} else {
+			found, err = fixed.Search(raw, func(d, t int) { done.Store(int32(d)); total.Store(int32(t)) })
+		}
 		rows := fixed.Annotate(found)
 		napifind.Log = nil
 		lmu.Lock()
@@ -276,7 +289,7 @@ func search(raw bool) bool {
 		log := lg.String()
 		lmu.Unlock()
 		mu.Lock()
-		st = state{Raw: raw, Rows: rows, found: found, Log: log}
+		st = state{Raw: raw, Known: known, Rows: rows, found: found, Log: log}
 		if err != nil {
 			st.Err = err.Error()
 		}

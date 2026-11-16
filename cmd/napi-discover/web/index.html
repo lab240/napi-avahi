@@ -53,8 +53,13 @@ tbody tr.raw { background: var(--raw); }
 tbody tr.gone { color: var(--muted); }
 td.fx { padding-left: 6px; }
 td.fx input { vertical-align: -2px; margin: 0 6px 0 0; cursor: pointer; accent-color: var(--accent); }
-td.fx b { font-weight: 600; cursor: text; }
-td.own { cursor: text; }
+td.fx b { font-weight: 600; }
+td.fx button.pen { padding: 0 5px; margin: 0 6px 0 0; font-size: 12px; line-height: 18px; vertical-align: 1px; }
+#edit form { text-align: left; display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; align-items: center; min-width: min(420px, 80vw); }
+#edit input { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 5px 8px; }
+#edit .note, #edit .err { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 12.5px; }
+#edit .err { color: #c0392b; }
+#edit .btns { grid-column: 1 / -1; text-align: right; display: flex; gap: 8px; justify-content: flex-end; }
 tbody tr.sel { background: var(--sel); color: var(--sel-text); box-shadow: inset 3px 0 0 var(--accent); }
 td.empty { color: var(--muted); text-align: center; padding: 30px; white-space: normal; }
 #log { display: none; margin-top: 8px; max-height: 220px; overflow: auto; background: var(--panel); border: 1px solid var(--line);
@@ -78,7 +83,7 @@ dialog form { text-align: right; margin-top: 10px; }
   <button id="raw">Сырой поиск</button>
   <span class="drop"><button id="con">Консоль ▾</button><div class="menu" id="conMenu"></div></span>
   <span class="sep"></span>
-  <button class="b" data-port="8080">napiconfig</button>
+  <button class="b" data-port="443">napiconfig</button>
   <button class="b" id="ssh">SSH</button>
   <button class="b" data-port="8086">influxdb</button>
   <button class="b" data-port="3000">grafana</button>
@@ -96,6 +101,20 @@ dialog form { text-align: right; margin-top: 10px; }
   <div id="log"></div>
 </main>
 
+<dialog id="edit">
+  <h2 id="editTitle">Плата</h2>
+  <form id="editForm">
+    <label for="eName">Моё имя</label><input id="eName" required>
+    <label for="eModel">Модель</label><input id="eModel" data-f="model">
+    <label for="eSoC">SoC</label><input id="eSoC" data-f="soc">
+    <label for="eRole">Роль</label><input id="eRole" data-f="role">
+    <label for="eOS">ОС</label><input id="eOS" data-f="os">
+    <p class="note" id="editNote"></p>
+    <p class="err" id="editErr"></p>
+    <div class="btns"><button type="button" id="editCancel">Отмена</button><button class="main">Сохранить</button></div>
+  </form>
+</dialog>
+
 <dialog id="help">
   <h2><img src="napi.svg" alt=""> napi-discover <span id="ver"></span></h2>
   <p>Поиск плат NAPI в сети, SSH и консоль UART.</p>
@@ -104,7 +123,9 @@ dialog form { text-align: right; margin-top: 10px; }
     двойной щелчок по строке: SSH, Ctrl+C: копировать IP. Зелёные строки: napi-avahi, жёлтые: «NAPI?» (голый avahi или сырой поиск).</p>
   <p>Галочка «Моё имя»: дайте плате своё имя. Отмеченные платы идут первыми, «Искать» проверяет их и без avahi,
     плата узнаётся по ключу SSH и MAC, даже если сменился IP или имя в сети. Не найденная плата остаётся серой строкой внизу.
-    Двойной щелчок по имени: переименовать. Модель и SoC отмеченной платы без napi-avahi: двойной щелчок по ячейке «Модель» или «SoC». Список хранится на этом компьютере: <code>~/.config/napi-discover/boards.json</code>.</p>
+    ✎ у отмеченной платы (или F2): своё имя, модель, SoC, роль и ОС выбранной платы (ваше значение показывается вместо того, что сообщает плата; пустое поле: снова данные платы).
+    Отмеченные платы показываются сразу при запуске: программа проверяет их по последнему IP и ключу SSH, «Искать» нужна для новых плат и для сменивших IP.
+    Список хранится на этом компьютере: <code>~/.config/napi-discover/boards.json</code>.</p>
   <p>Кнопка «Искать» находит плату, на которой работает avahi-daemon. Модель, SoC и роль в таблице даёт сервис napi-avahi: <code>apt install napi-avahi</code>
     из репозитория napilab: <a href="https://repo.napilab.ru" target="_blank">repo.napilab.ru</a>.
     Исходники и подключение репозитория: <a href="https://github.com/lab240/napi-avahi" target="_blank">github.com/lab240/napi-avahi</a>.
@@ -142,45 +163,64 @@ function render() {
     const fx = tr.insertCell(), cb = document.createElement("input"), nm = document.createElement("b");
     fx.className = "fx"; cb.type = "checkbox"; cb.checked = !!r.Fixed; nm.textContent = r.Fixed || "";
     cb.title = r.Fixed ? "Снять отметку" : "Отметить и дать своё имя";
-    cb.onclick = e => { e.stopPropagation(); e.preventDefault(); r.Fixed ? unfix(i) : rename(i); };
-    nm.ondblclick = e => { e.stopPropagation(); rename(i); };
-    nm.title = "Двойной щелчок: переименовать";
-    fx.append(cb, nm);
+    cb.onclick = e => { e.stopPropagation(); e.preventDefault(); r.Fixed ? unfix(i) : edit(i); };
+    cb.ondblclick = e => e.stopPropagation();
+    fx.append(cb);
+    if (r.Fixed) { // the small button of a marked board: "Изменить"
+      const pen = document.createElement("button");
+      pen.className = "pen"; pen.textContent = "✎"; pen.title = "Изменить: своё имя, модель, SoC, роль, ОС";
+      pen.onclick = e => { e.stopPropagation(); edit(i); };
+      pen.ondblclick = e => e.stopPropagation();
+      fx.append(pen);
+    }
+    fx.append(nm);
     for (const v of [r.Name, r.IP, r.Model, r.SoC, r.OS, r.Role, r.MAC, r.Signs]) tr.insertCell().textContent = v || "";
-    if (r.Fixed && r.Kind !== "avahi") // the model and the SoC of a marked board without napi-avahi
-      [["model", "Модель", 3], ["soc", "SoC", 4]].forEach(([f, what, c]) => {
-        const td = tr.cells[c];
-        td.className = "own"; td.title = "Двойной щелчок: задать " + what;
-        td.ondblclick = e => { e.stopPropagation(); setInfo(i, f, what); };
-      });
     tr.className = (r.Kind || "") + (i === sel ? " sel" : "");
-    tr.onclick = () => { sel = i; render(); };
-    tr.ondblclick = () => { sel = i; render(); $("#ssh").click(); };
+    // no render on a click: a new row under the mouse would lose the double click
+    tr.onclick = () => select(i);
+    tr.ondblclick = () => { select(i); $("#ssh").click(); };
   });
+  buttons();
+}
+
+function select(i) {
+  sel = i;
+  [...$("#rows").rows].forEach((tr, j) => tr.classList.toggle("sel", j === i));
   buttons();
 }
 
 function ip(r) { return (r.IP || "").split(",")[0].trim(); }
 
-// "fix": the user's own name for a board, kept on this computer
-async function rename(i) {
-  const r = rows[i], def = r.Fixed || (r.Name || "").replace(/\.local$/, "") || ip(r);
-  const name = prompt(`Своё имя для ${ip(r)}${r.Name ? " (" + r.Name + ")" : ""}:`, def);
-  if (name === null || !name.trim()) return;
-  await setFix(i, name.trim(), `«${name.trim()}»: отмечена, будет первой в списке`);
+// "Изменить": the user's own name, model, SoC, role and OS of a board, kept on this computer
+let editRow = -1;
+function edit(i) {
+  if (busy || i < 0 || i >= rows.length) return;
+  const r = rows[i];
+  editRow = i;
+  $("#editTitle").textContent = (r.Fixed ? "Изменить «" + r.Fixed + "»" : "Отметить плату") + " — " + ip(r);
+  $("#eName").value = r.Fixed || (r.Name || "").replace(/\.local$/, "") || ip(r);
+  for (const [id, v] of [["#eModel", r.Model], ["#eSoC", r.SoC], ["#eRole", r.Role], ["#eOS", r.OS]]) $(id).value = v || "";
+  $("#editNote").textContent = "Ваше значение показывается вместо того, что сообщает плата; пустое поле: снова данные платы.";
+  $("#editErr").textContent = "";
+  $("#edit").showModal(); $("#eName").select();
 }
+$("#editCancel").onclick = () => $("#edit").close();
+$("#editForm").onsubmit = async e => {
+  e.preventDefault();
+  const r = rows[editRow], name = $("#eName").value.trim();
+  if (!r) { $("#edit").close(); return; }
+  const q = ["model", "soc", "role", "os"].map(f => `&${f}=${encodeURIComponent($(`#editForm [data-f=${f}]`).value.trim())}`).join("");
+  try {
+    await api(`edit?i=${editRow}&name=${encodeURIComponent(name)}${q}`, true);
+    $("#edit").close();
+    const s = await api("state"), keep = ip(r);
+    rows = s.rows || []; sel = rows.findIndex(x => ip(x) === keep);
+    render(); status(`«${name}» сохранена` + (r.Fixed ? "" : ": отмечена, будет первой в списке"));
+  } catch (err) { $("#editErr").textContent = err.message; }
+};
 async function unfix(i) {
   if (!confirm(`Снять отметку «${rows[i].Fixed}»?`)) return;
   await setFix(i, "", "Отметка снята");
-}
-async function setInfo(i, field, what) {
-  const r = rows[i], v = prompt(`${what} «${r.Fixed}» (пусто: стереть):`, (field === "model" ? r.Model : r.SoC) || "");
-  if (v === null) return;
-  try {
-    await api(`setinfo?i=${i}&field=${field}&value=${encodeURIComponent(v.trim())}`, true);
-    const s = await api("state");
-    rows = s.rows || []; render(); status(`${what} «${r.Fixed}» сохранена`);
-  } catch (e) { status(what + ": " + e.message); }
 }
 async function setFix(i, name, msg) {
   try {
@@ -211,6 +251,7 @@ async function poll() {
   const dots = ["", ".", "..", "..."][Math.floor(tick / 2) % 4];
   if (s.busy) {
     if (!busy) { busy = true; lastRaw = s.raw; buttons(); document.body.classList.add("busy"); }
+    if (first && s.known && s.rows?.length) { rows = s.rows; render(); } // the marked boards as last seen
     first = false;
     let pos;
     if (s.raw && s.total) {
@@ -218,7 +259,7 @@ async function poll() {
       status(`Сырой поиск: проверяю порт 22 по всей подсети${dots}  ${s.done} из ${s.total}`);
     } else {
       pos = Math.min(s.since / 30, 100);
-      status((s.raw ? "Сырой поиск" : "Ищу NAPI (avahi)") + dots);
+      status((s.known ? "Проверяю отмеченные платы" : s.raw ? "Сырой поиск" : "Ищу NAPI (avahi)") + dots);
     }
     $("#prog > div").style.width = pos + "%";
     setTimeout(poll, 150);
@@ -230,6 +271,10 @@ async function poll() {
     $("#log").textContent = s.log || "";
     render();
     if (s.err) status("Ошибка: " + s.err);
+    else if (s.known) {
+      const here = rows.filter(r => r.Kind !== "gone").length;
+      status(`Отмеченные: на месте ${here}` + (rows.length > here ? `, не отвечают ${rows.length - here}` : "") + ". «Искать»: новые платы и сменившие IP.");
+    }
     else if (!rows.length) status(lastRaw ? "Никто не ответил на порту 22." : "NAPI не найдены.");
     else status(lastRaw ? `На порту 22: ${rows.length}. «NAPI?»: Linux с признаками NAPI, но без napi-avahi.`
       : `Найдено: ${rows.length}. Двойной щелчок: SSH; Ctrl+C копирует IP.`);
@@ -242,7 +287,7 @@ $("#find").onclick = () => search(false);
 $("#raw").onclick = () => search(true);
 document.querySelectorAll("button[data-port]").forEach(b => b.onclick = () => {
   if (sel < 0) return;
-  const url = `http://${ip(rows[sel])}:${b.dataset.port}`;
+  const p = b.dataset.port, url = p === "443" ? `https://${ip(rows[sel])}` : `http://${ip(rows[sel])}:${p}`;
   window.open(url, "_blank"); status("Открываю " + url);
 });
 $("#ssh").onclick = async () => {
@@ -250,8 +295,9 @@ $("#ssh").onclick = async () => {
   try { await api("ssh?ip=" + encodeURIComponent(ip(rows[sel])), true); status("SSH: " + ip(rows[sel])); }
   catch (e) { status("SSH: " + e.message); }
 };
-// Ctrl+C on a selected row (no text selected): its IP.
+// Ctrl+C on a selected row (no text selected): its IP. F2: "Изменить".
 document.addEventListener("keydown", e => {
+  if (e.key === "F2" && sel >= 0 && !$("#edit").open) { e.preventDefault(); edit(sel); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c" && sel >= 0 && !String(getSelection())) {
     navigator.clipboard?.writeText(ip(rows[sel])).then(() => status("Скопировано: " + ip(rows[sel])));
     e.preventDefault();

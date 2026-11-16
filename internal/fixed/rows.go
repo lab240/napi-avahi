@@ -15,7 +15,7 @@ type Row struct {
 	Entry                                      int    // the index of the entry in boards.json, -1 when not marked
 	Name, IP, Model, SoC, OS, Role, MAC, Signs string
 	Key                                        string // SSH host key, for "fix"
-	Kind                                       string // "avahi", "raw" (NAPI? of the raw search), "gone" (marked, not found now), ""
+	Kind                                       string // "avahi", "raw" (NAPI? of the raw search), "gone" (marked, not found now), "wait" (Saved), ""
 }
 
 // FirstIP: the address for the buttons ("a, b" with two interfaces).
@@ -143,6 +143,12 @@ func Annotate(found []Row) []Row {
 		fs[i] = Found{IP: r.FirstIP(), MAC: r.MAC, Key: r.Key, Host: r.Name}
 	}
 	idx, changed := Match(es, fs, time.Now())
+	for i, e := range idx {
+		if e >= 0 {
+			r := found[i]
+			es[e].Last, changed = &Info{Model: r.Model, SoC: r.SoC, Role: r.Role, OS: r.OS}, true
+		}
+	}
 	if changed {
 		Save(es)
 		es, _ = Load() // Save sorts
@@ -154,6 +160,9 @@ func Annotate(found []Row) []Row {
 		r.Fixed, r.Entry = "", -1
 		if e := idx[i]; e >= 0 {
 			r.Fixed, r.Entry, seen[e] = es[e].Name, e, true
+			if r.Name == "" { // no mDNS answer (another subnet): the name it had
+				r.Name = es[e].Host
+			}
 			own(&r, es[e])
 			marked = append(marked, r)
 			continue
@@ -172,18 +181,21 @@ func Annotate(found []Row) []Row {
 			when = " " + x.Seen.Local().Format("02.01.2006 15:04")
 		}
 		out = append(out, Row{Fixed: x.Name, Entry: e, Name: x.Host, IP: x.IP, MAC: x.MAC, Key: x.Key, Kind: "gone",
-			Model: x.Model, SoC: x.SoC, Signs: fmt.Sprintf("не найдена (последний раз%s)", when)})
+			Model: x.Model, SoC: x.SoC, Role: x.Role, OS: x.OS, Signs: fmt.Sprintf("не найдена (последний раз%s)", when)})
 	}
 	return out
 }
 
-// own: the model and the SoC the user gave, where the board did not tell them (no napi-avahi).
+// own: the model, the SoC, the role and the OS the user gave win over the board's own (napi-avahi,
+// the SSH banner as the OS); an empty one shows the board's.
 func own(r *Row, e Entry) {
-	if r.Model == "" {
-		r.Model = e.Model
-	}
-	if r.SoC == "" {
-		r.SoC = e.SoC
+	for _, f := range []struct {
+		row  *string
+		user string
+	}{{&r.Model, e.Model}, {&r.SoC, e.SoC}, {&r.Role, e.Role}, {&r.OS, e.OS}} {
+		if f.user != "" {
+			*f.row = f.user
+		}
 	}
 }
 
@@ -209,26 +221,112 @@ func sortNAPIFirst(rows []Row) {
 	})
 }
 
-// SetInfo sets the model ("model") or the SoC ("soc") of a marked board; "" clears it.
-func SetInfo(r Row, field, value string) error {
+// Info: what the user gives a board in "Изменить".
+type Info struct {
+	Name  string `json:"name,omitempty"`
+	Model string `json:"model,omitempty"`
+	SoC   string `json:"soc,omitempty"`
+	Role  string `json:"role,omitempty"`
+	OS    string `json:"os,omitempty"`
+}
+
+// Edit marks the row with in.Name (or renames it) and sets the model, the SoC, the role and the OS
+// ("" clears one). The name is needed: unmarking is SetName(r, "").
+func Edit(r Row, in Info) error {
+	name := strings.TrimSpace(in.Name)
+	if name == "" {
+		return fmt.Errorf("нужно имя")
+	}
 	es, err := Load()
 	if err != nil {
 		return err
 	}
-	e := r.Entry
-	if e < 0 || e >= len(es) || es[e].Name != r.Fixed {
-		return fmt.Errorf("плата не отмечена: сначала поставьте галочку")
+	e := -1
+	if r.Entry >= 0 && r.Entry < len(es) && es[r.Entry].Name == r.Fixed {
+		e = r.Entry
+	} else {
+		f := Found{IP: r.FirstIP(), MAC: r.MAC, Key: r.Key, Host: r.Name}
+		idx, _ := Match(es, []Found{f}, time.Now())
+		if e = idx[0]; e < 0 {
+			es = append(es, Entry{MAC: f.MAC, Key: f.Key, IP: f.IP, Host: f.Host, Seen: time.Now()})
+			e = len(es) - 1
+		}
 	}
-	value = strings.TrimSpace(value)
-	switch field {
-	case "model":
-		es[e].Model = value
-	case "soc":
-		es[e].SoC = value
-	default:
-		return fmt.Errorf("поле %q", field)
+	x := &es[e]
+	x.Name = name
+	// a field left as shown keeps the mark's value: the shown one may be the board's own (the SSH
+	// banner as the OS, the TXT of napi-avahi), not the user's
+	for _, f := range []struct {
+		to        *string
+		in, shown string
+	}{
+		{&x.Model, in.Model, r.Model}, {&x.SoC, in.SoC, r.SoC}, {&x.Role, in.Role, r.Role}, {&x.OS, in.OS, r.OS}} {
+		if v := strings.TrimSpace(f.in); v != strings.TrimSpace(f.shown) {
+			*f.to = v
+		}
 	}
 	return Save(es)
+}
+
+// Saved: the marked boards as last seen, from the file alone (no network): the table at once,
+// while Known checks them. Kind "wait".
+func Saved() []Row {
+	es, _ := Load()
+	var out []Row
+	for e, x := range es {
+		r := Row{Fixed: x.Name, Entry: e, Name: x.Host, IP: x.IP, MAC: x.MAC, Key: x.Key, Kind: "wait", Signs: "проверяю…"}
+		if l := x.Last; l != nil {
+			r.Model, r.SoC, r.Role, r.OS = l.Model, l.SoC, l.Role, l.OS
+		}
+		own(&r, x)
+		out = append(out, r)
+	}
+	return out
+}
+
+// Known: the marked boards at their last IP, at once, without a search: TCP 22 there and the SSH
+// host key (the MAC on the own subnet) must be the board's, else it is not there (DHCP gave the IP
+// to another host). Works across routers. Annotate adds the ones not there as "gone".
+func Known() []Row {
+	es, _ := Load()
+	if len(es) == 0 {
+		return nil
+	}
+	// napi-avahi tells the model and the SoC; asked meanwhile (2 s, the own subnets only)
+	avahi := make(chan []napifind.Board, 1)
+	go func() { b, _, _ := napifind.FindAll(2 * time.Second); avahi <- b }()
+	rows := lastSeen(nil, es)
+	byIP := map[string]napifind.Board{}
+	for _, b := range <-avahi {
+		for _, ip := range b.IP {
+			byIP[ip] = b
+		}
+	}
+	for i := range rows {
+		if b, ok := byIP[rows[i].FirstIP()]; ok {
+			t := b.TXT
+			rows[i].Model, rows[i].SoC, rows[i].OS, rows[i].Role = t["model"], t["soc"], t["os"], t["role"]
+			rows[i].Kind, rows[i].Signs = "avahi", "napi-avahi"
+		}
+	}
+	var ips []string
+	for _, r := range rows {
+		ips = append(ips, r.FirstIP())
+	}
+	keys := napifind.HostKeys(ips)
+	fs := make([]Found, len(rows))
+	for i := range rows {
+		rows[i].Key = keys[rows[i].FirstIP()]
+		fs[i] = Found{IP: rows[i].FirstIP(), MAC: rows[i].MAC, Key: rows[i].Key, Host: rows[i].Name}
+	}
+	idx, _ := Match(append([]Entry{}, es...), fs, time.Now())
+	var out []Row
+	for i, r := range rows {
+		if idx[i] >= 0 {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // SetName marks a row with a name, renames it, or ("") unmarks it.

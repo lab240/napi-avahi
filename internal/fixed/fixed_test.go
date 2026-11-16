@@ -79,26 +79,78 @@ func TestAnnotateOrderAndInfo(t *testing.T) {
 	if got := strings.Join(ips, " "); got != want {
 		t.Fatalf("order %s, want %s", got, want)
 	}
-	if err := SetInfo(out[0], "model", " Napi C (Classic) "); err != nil {
+	if err := Edit(out[0], Info{Name: "котельная", Model: " Napi C (Classic) ", SoC: "rk3308", Role: "термостат", OS: "NapiLinux"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := SetInfo(out[0], "soc", "rk3308"); err != nil {
-		t.Fatal(err)
+	if err := Edit(out[2], Info{Name: " "}); err == nil {
+		t.Fatal("Edit without a name")
 	}
-	if err := SetInfo(out[1], "soc", "x"); err == nil {
-		t.Fatal("SetInfo on an unmarked row")
+	// an unmarked napi-avahi row: marked by Edit; the model left as shown stays the board's
+	if err := Edit(out[1], Info{Name: "щит 20", Model: out[1].Model, Role: "щит"}); err != nil {
+		t.Fatal(err)
 	}
 	out = Annotate(found)
-	if out[0].Model != "Napi C (Classic)" || out[0].SoC != "rk3308" {
-		t.Fatalf("%+v", out[0])
+	if r := out[0]; r.Fixed != "котельная" || r.Model != "Napi C (Classic)" || r.SoC != "rk3308" || r.Role != "термостат" || r.OS != "NapiLinux" {
+		t.Fatalf("%+v", r)
+	}
+	if r := out[1]; r.Fixed != "щит 20" || r.Model != "Napi C" || r.Role != "щит" {
+		t.Fatalf("%+v", r)
+	}
+	// the user's model wins over the napi-avahi one; cleared, the board's is back
+	if err := Edit(out[1], Info{Name: "щит 20", Model: "мой RK3568", Role: "щит"}); err != nil {
+		t.Fatal(err)
+	}
+	if r := Annotate(found)[1]; r.Model != "мой RK3568" {
+		t.Fatalf("%+v", r)
+	}
+	if err := Edit(Annotate(found)[1], Info{Name: "щит 20", Role: "щит"}); err != nil {
+		t.Fatal(err)
+	}
+	if r := Annotate(found)[1]; r.Model != "Napi C" {
+		t.Fatalf("%+v", r)
+	}
+	// "Изменить" sends the fields as shown: the board's own values (the napi-avahi model, the SSH
+	// banner as the OS) do not become the user's
+	found[0].OS = "OpenSSH_9.6"
+	pc := Annotate(found)[3]
+	if err := Edit(pc, Info{Name: "пк", OS: pc.OS}); err != nil {
+		t.Fatal(err)
+	}
+	es, _ := Load()
+	for _, e := range es {
+		if (e.Name == "щит 20" && e.Model != "") || (e.Name == "пк" && e.OS != "") {
+			t.Fatalf("the board's own value saved: %+v", e)
+		}
 	}
 	// renamed: the model stays; not found: the gone row has it too
 	if err := SetName(out[0], "щит"); err != nil {
 		t.Fatal(err)
 	}
-	out = Annotate(found[2:])
-	last := out[len(out)-1]
-	if last.Kind != "gone" || last.Fixed != "щит" || last.Model != "Napi C (Classic)" {
-		t.Fatalf("%+v", last)
+	out = Annotate(found[3:])
+	var gone *Row
+	for i := range out {
+		if out[i].Fixed == "щит" {
+			gone = &out[i]
+		}
+	}
+	if gone == nil || gone.Kind != "gone" || gone.Model != "Napi C (Classic)" || gone.OS != "NapiLinux" {
+		t.Fatalf("%+v", out)
+	}
+}
+
+func TestSavedShowsLastSeen(t *testing.T) {
+	dir := t.TempDir()
+	Path = func() string { return filepath.Join(dir, "boards.json") }
+	found := []Row{{Name: "napi3568.local", IP: "10.0.0.20", Key: "K20", Kind: "avahi", Model: "Napi 2", SoC: "rk3568", OS: "armbian"}}
+	if err := SetName(found[0], "щит"); err != nil {
+		t.Fatal(err)
+	}
+	out := Annotate(found) // remembers what the board told
+	if err := Edit(out[0], Info{Name: "щит", Model: out[0].Model, SoC: out[0].SoC, OS: out[0].OS, Role: "котёл"}); err != nil {
+		t.Fatal(err)
+	}
+	s := Saved()
+	if len(s) != 1 || s[0].Kind != "wait" || s[0].IP != "10.0.0.20" || s[0].Model != "Napi 2" || s[0].SoC != "rk3568" || s[0].Role != "котёл" {
+		t.Fatalf("%+v", s)
 	}
 }

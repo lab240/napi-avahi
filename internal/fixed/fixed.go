@@ -23,10 +23,15 @@ type Entry struct {
 	Key  string `json:"key,omitempty"`  // SHA256:... of the SSH host key
 	IP   string `json:"ip,omitempty"`   // the last one seen
 	Host string `json:"host,omitempty"` // the last network name seen
-	// set by the user for a board without napi-avahi (with it, its TXT wins)
+	// set by the user: shown instead of what the board tells (napi-avahi, the SSH banner)
 	Model string    `json:"model,omitempty"`
 	SoC   string    `json:"soc,omitempty"`
+	Role  string    `json:"role,omitempty"`
+	OS    string    `json:"os,omitempty"`
 	Seen  time.Time `json:"seen,omitempty"`
+	// what the board told of itself when last found (napi-avahi, the SSH banner): the table shows
+	// it at the start, before the check
+	Last *Info `json:"last,omitempty"`
 }
 
 // Found is one row of a search, as far as matching goes.

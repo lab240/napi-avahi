@@ -1,6 +1,6 @@
 // napi-discover: a small Windows window that finds the NAPI boards on the LAN.
-// Button "Искать", a table (name, IP, model, SoC, OS, role, MAC, signs); double click copies the IP,
-// napiconfig / influxdb / grafana / donoff open http://<IP>:<port> of the selected board; "Журнал"
+// Button "Искать", a table (name, IP, model, SoC, OS, role, MAC, signs); double click: SSH; Ctrl+C copies the IP;
+// napiconfig (https://<IP>) / influxdb / grafana / donoff (http://<IP>:<port>) of the selected board; "Журнал"
 // shows what the last search did. "Сырой поиск" lists everything on TCP 22 of the subnet with the
 // signs of a NAPI, for boards without napi-avahi. "SSH" opens a console that asks the login and runs
 // ssh <login>@<IP> (the host key is not checked: boards get reflashed). "Консоль ▾" lists the COM ports
@@ -83,8 +83,7 @@ var (
 	pKillTimer             = user32.NewProc("KillTimer")
 	pDestroyWindow         = user32.NewProc("DestroyWindow")
 	pGetWindowText         = user32.NewProc("GetWindowTextW")
-	pSetWindowSubclass     = comctl32.NewProc("SetWindowSubclass")
-	pDefSubclassProc       = comctl32.NewProc("DefSubclassProc")
+	pGetWindowRect         = user32.NewProc("GetWindowRect")
 )
 
 const (
@@ -107,37 +106,33 @@ const (
 	pbmSetRange32 = 0x0406
 	wmApp         = 0x8000
 
-	lvsReport         = 0x0001
-	lvsSingleSel      = 0x0004
-	lvsShowSelAlways  = 0x0008
-	lvmDeleteAll      = 0x1009
-	lvmGetNextItem    = 0x100C
-	lvmInsertItem     = 0x104D
-	lvmInsertColumn   = 0x1061
-	lvmSetItemText    = 0x1074
-	lvmSetExStyle     = 0x1036
-	lvsExFullRow      = 0x0020
-	lvsExGrid         = 0x0001
-	lvcfWidth         = 0x0002
-	lvcfText          = 0x0004
-	lvifText          = 0x0001
-	lvniSelected      = 0x0002
-	nmDblClk          = ^uint32(2)   // NM_DBLCLK = -3
-	nmCustomDraw      = ^uint32(11)  // NM_CUSTOMDRAW = -12
-	lvnKeyDown        = ^uint32(154) // LVN_KEYDOWN = -155
-	lvnItemChanged    = ^uint32(100) // LVN_ITEMCHANGED = -101
-	lvnEndLabelEdit   = ^uint32(175) // LVN_ENDLABELEDITW = -176
-	lvsEditLabels     = 0x0200
-	lvsExCheckBoxes   = 0x0004
-	lvmSetItemState   = 0x102B
-	lvmEditLabel      = 0x1076 // LVM_EDITLABELW
-	lvisStateImage    = 0xF000
-	wmAppEdit         = 0x8001 // start editing the name of a row just checked
-	wmAppRefresh      = 0x8002 // the marks changed: the table again
-	wmAppCell         = 0x8003 // the model/SoC edit box is done: wParam 1 saves, 0 cancels
-	lvmGetSubItemRect = 0x1038
-	colModel          = 3
-	colSoC            = 4
+	lvsReport        = 0x0001
+	lvsSingleSel     = 0x0004
+	lvsShowSelAlways = 0x0008
+	lvmDeleteAll     = 0x1009
+	lvmGetNextItem   = 0x100C
+	lvmInsertItem    = 0x104D
+	lvmInsertColumn  = 0x1061
+	lvmSetItemText   = 0x1074
+	lvmSetExStyle    = 0x1036
+	lvsExFullRow     = 0x0020
+	lvsExGrid        = 0x0001
+	lvcfWidth        = 0x0002
+	lvcfText         = 0x0004
+	lvifText         = 0x0001
+	lvniSelected     = 0x0002
+	nmDblClk         = ^uint32(2)   // NM_DBLCLK = -3
+	nmCustomDraw     = ^uint32(11)  // NM_CUSTOMDRAW = -12
+	lvnKeyDown       = ^uint32(154) // LVN_KEYDOWN = -155
+	lvnItemChanged   = ^uint32(100) // LVN_ITEMCHANGED = -101
+	lvsExCheckBoxes  = 0x0004
+	lvmSetItemState  = 0x102B
+	lvisStateImage   = 0xF000
+	wmAppEdit        = 0x8001     // open "Изменить" for a row just checked
+	wmAppRefresh     = 0x8002     // the marks changed: the table again
+	nmClick          = ^uint32(1) // NM_CLICK = -2
+	lvmGetItemRect   = 0x100E
+	pen              = "✎ " // the "button" of a marked row: the start of its name cell
 
 	idFind  = 101
 	idWeb   = 110 // + index in webs
@@ -254,17 +249,20 @@ var (
 	dpi                                                                                  = 96
 	uiFont                                                                               uintptr
 
-	// the edit box over the model or SoC cell of a marked row
-	cellEdit         uintptr
-	cellRow, cellCol int
-	cellProc         = syscall.NewCallback(cellSubclass)
+	// "Изменить": the window (0 when closed), its fields (name, model, SoC, role, OS), the row
+	hwndDlg    uintptr
+	dlgFields  [5]uintptr
+	dlgErr     uintptr
+	dlgRow     int
+	dlgProcCB  = syscall.NewCallback(dlgProc)
+	dlgClassOK bool
 
 	// The progress of a search: the raw one counts addresses, the ordinary one goes by time.
 	busyText            string
 	busyStart           time.Time
 	busyTick            int
 	scanDone, scanTotal atomic.Int32
-	rawSearch           bool
+	searchMode          int
 )
 
 func u16(s string) *uint16 { p, _ := syscall.UTF16PtrFromString(s); return p }
@@ -366,7 +364,7 @@ func window() {
 	mono, _, _ := pCreateFont.Call(uintptr(-px(13)), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, uintptr(unsafe.Pointer(u16("Consolas"))))
 	send(hwndLog, wmSetFont, mono, 1)
 	hwndList, _, _ = pCreateWindowEx.Call(wsExClientEdge, uintptr(unsafe.Pointer(u16("SysListView32"))), 0,
-		wsChild|wsVisible|wsTabStop|lvsReport|lvsSingleSel|lvsShowSelAlways|lvsEditLabels, 0, 0, 10, 10, hwndMain, idList, inst, 0)
+		wsChild|wsVisible|wsTabStop|lvsReport|lvsSingleSel|lvsShowSelAlways, 0, 0, 10, 10, hwndMain, idList, inst, 0)
 	send(hwndList, wmSetFont, uiFont, 1)
 	send(hwndList, lvmSetExStyle, 0, lvsExFullRow|lvsExGrid|lvsExCheckBoxes)
 	for i, c := range []struct {
@@ -379,12 +377,21 @@ func window() {
 	layout()
 	actions()
 	status("Нажмите «Искать» (платы с avahi) или «Сырой поиск» (всё, что отвечает на порту 22).")
+	if saved := fixed.Saved(); len(saved) > 0 { // the marked boards at once, as last seen; then checked
+		fill(makeRows(saved))
+		find(modeKnown)
+	}
 
 	var m msg
 	for {
 		r, _, _ := pGetMessage.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
 		if int32(r) <= 0 {
 			return
+		}
+		if hwndDlg != 0 { // Tab, Enter and Esc of "Изменить"
+			if d, _, _ := pIsDialogMessage.Call(hwndDlg, uintptr(unsafe.Pointer(&m))); d != 0 {
+				continue
+			}
 		}
 		if d, _, _ := pIsDialogMessage.Call(hwndMain, uintptr(unsafe.Pointer(&m))); d != 0 {
 			continue
@@ -446,12 +453,19 @@ func toggleLog() {
 
 func status(s string) { pSetWindowText.Call(hwndStatus, uintptr(unsafe.Pointer(u16(s)))) }
 
+// What find does: the ordinary search, the raw one, the check of the marked boards at their last IP.
+const (
+	modeAvahi = iota
+	modeRaw
+	modeKnown
+)
+
 // The search runs in the background; the window gets wmApp when it is over.
-func find(raw bool) {
+func find(mode int) {
 	if busy {
 		return
 	}
-	setBusy(true, raw)
+	setBusy(true, mode)
 	result = make(chan []fixed.Row, 1)
 	go func(ch chan []fixed.Row) {
 		var (
@@ -464,10 +478,16 @@ func find(raw bool) {
 			fmt.Fprintf(&lg, "%5.2fs  "+f+"\r\n", append([]any{time.Since(t0).Seconds()}, a...)...)
 			lmu.Unlock()
 		}
-		list, err := fixed.Search(raw, func(done, total int) {
-			scanDone.Store(int32(done))
-			scanTotal.Store(int32(total))
-		})
+		var list []fixed.Row
+		var err error
+		if mode == modeKnown {
+			list = fixed.Known()
+		} else {
+			list, err = fixed.Search(mode == modeRaw, func(done, total int) {
+				scanDone.Store(int32(done))
+				scanTotal.Store(int32(total))
+			})
+		}
 		out := list
 		napifind.Log = nil
 		lmu.Lock()
@@ -487,21 +507,19 @@ func find(raw bool) {
 }
 
 // While searching: the buttons are off, the progress bar and the dots in the status run.
-func setBusy(on, raw bool) {
+func setBusy(on bool, mode int) {
 	busy = on
 	pEnableWindow.Call(hwndFind, b2u(!on))
 	pEnableWindow.Call(hwndRaw, b2u(!on))
 	actions()
 	if on {
-		rawSearch = raw
+		searchMode = mode
 		scanDone.Store(0)
 		scanTotal.Store(0)
 		busyStart = time.Now()
 		busyTick = 0
-		busyText = "Ищу NAPI (avahi)"
-		if raw {
-			busyText = "Сырой поиск: проверяю порт 22 по всей подсети"
-		}
+		busyText = map[int]string{modeAvahi: "Ищу NAPI (avahi)", modeRaw: "Сырой поиск: проверяю порт 22 по всей подсети",
+			modeKnown: "Проверяю отмеченные платы по последнему IP"}[mode]
 		send(hwndProgress, pbmSetPos, 0, 0)
 		pShowWindow.Call(hwndProgress, 5) // SW_SHOW
 		pSetTimer.Call(hwndMain, 1, 150, 0)
@@ -524,7 +542,7 @@ func tick() {
 	busyTick++
 	dots := []string{"   ", ".  ", ".. ", "..."}[busyTick/2%4]
 	pos := 0
-	if rawSearch {
+	if searchMode == modeRaw {
 		if t := scanTotal.Load(); t > 0 {
 			d := scanDone.Load()
 			pos = int(d) * 900 / int(t) // the last tenth: names and the napi-avahi answers
@@ -555,19 +573,32 @@ func actions() {
 func show(f []fixed.Row) {
 	found = f
 	list := makeRows(fixed.Annotate(f))
-	setBusy(false, false)
+	setBusy(false, searchMode)
 	pSetWindowText.Call(hwndLog, uintptr(unsafe.Pointer(u16(logText))))
 	fill(list)
 	switch {
 	case findErr != nil:
 		status("Ошибка: " + findErr.Error())
-	case len(list) == 0 && rawSearch:
+	case searchMode == modeKnown:
+		selectRow(0)
+		here := 0
+		for _, r := range list {
+			if r.kind != kindGone {
+				here++
+			}
+		}
+		s := "Отмеченные: на месте " + strconv.Itoa(here)
+		if len(list) > here {
+			s += ", не отвечают " + strconv.Itoa(len(list)-here)
+		}
+		status(s + ". «Искать»: новые платы и сменившие IP.")
+	case len(list) == 0 && searchMode == modeRaw:
 		status("Никто не ответил на порту 22.")
 	case len(list) == 0:
 		status("NAPI не найдены: никто не ответил по avahi. Платы без avahi найдёт «Сырой поиск».")
 	default:
 		selectRow(0)
-		if rawSearch {
+		if searchMode == modeRaw {
 			status("На порту 22: " + strconv.Itoa(len(list)) + ". «NAPI?»: Linux с признаками NAPI, но без napi-avahi.")
 		} else {
 			status("Найдено: " + strconv.Itoa(len(list)) + ". Двойной щелчок: SSH; Ctrl+C копирует IP.")
@@ -583,7 +614,11 @@ func fill(list []row) {
 	send(hwndList, lvmDeleteAll, 0, 0)
 	for i, r := range list {
 		cells := r.cells
-		it := lvItem{mask: lvifText, item: int32(i), text: u16(cells[0])}
+		first := cells[0]
+		if r.Fixed != "" {
+			first = pen + first
+		}
+		it := lvItem{mask: lvifText, item: int32(i), text: u16(first)}
 		send(hwndList, lvmInsertItem, 0, uintptr(unsafe.Pointer(&it)))
 		for c := 1; c < len(cells); c++ {
 			it := lvItem{subItem: int32(c), text: u16(cells[c])}
@@ -620,7 +655,7 @@ func refresh(keepIP string) {
 }
 
 // LVN_ITEMCHANGED (NMLISTVIEW: iItem at 24, uNewState 32, uOldState 36, uChanged 40): a checkbox.
-// Checked: edit the name in place; unchecked: drop the mark.
+// Checked: "Изменить" (the name first); unchecked: drop the mark.
 func checkChanged(lp uintptr) {
 	if filling || busy {
 		return
@@ -645,130 +680,127 @@ func checkChanged(lp uintptr) {
 	}
 }
 
-// editName: the name cell of row i becomes an edit box (the label of the item).
-func editName(i int) {
-	if i < 0 || i >= len(rows) || busy {
-		return
-	}
-	if rows[i].Fixed == "" { // a suggestion: the network name without .local, else the IP
-		def := strings.TrimSuffix(rows[i].Name, ".local")
-		if def == "" {
-			def = rows[i].ip
-		}
-		it := lvItem{subItem: 0, text: u16(def)}
-		send(hwndList, lvmSetItemText, uintptr(i), uintptr(unsafe.Pointer(&it)))
-	}
-	pSetFocus.Call(hwndList)
-	send(hwndList, lvmEditLabel, uintptr(i), 0)
-	status("Своё имя платы: Enter сохраняет, Esc отменяет, пустое имя снимает отметку.")
-}
-
-// LVN_ENDLABELEDITW (NMLVDISPINFOW: the LVITEMW at 24, iItem at 28, pszText at 48): nil is Esc.
-func nameEdited(lp uintptr) {
-	i := int(*(*int32)(unsafe.Pointer(lp + 28)))
-	p := *(**uint16)(unsafe.Pointer(lp + 48))
-	if i < 0 || i >= len(rows) {
+// "Изменить": a window over the main one (disabled meanwhile) with the user's name, the model,
+// the SoC, the role and the OS of row i; Enter saves, Esc cancels. All of them can be changed: the
+// user's value is shown instead of the board's own, an empty one shows the board's again.
+func editOpen(i int) {
+	if busy || hwndDlg != 0 || i < 0 || i >= len(rows) {
 		return
 	}
 	r := rows[i]
-	if p != nil {
-		name := strings.TrimSpace(windows.UTF16PtrToString(p))
-		if err := fixed.SetName(r.Row, name); err != nil {
-			status("Отметка: " + err.Error())
-		} else if name == "" {
-			status("Отметка снята")
-		} else {
-			status("«" + name + "»: отмечена, будет первой в списке")
-		}
-	} else {
-		status("")
-	}
-	pPostMessage.Call(hwndMain, wmAppRefresh, 0, 0)
-}
-
-// editCell: the model or SoC cell of a marked row i becomes an edit box (a child of the list).
-func editCell(i, col int) {
-	if busy || i < 0 || i >= len(rows) {
-		return
-	}
-	r := rows[i]
-	if r.Fixed == "" {
-		status("Модель и SoC задаются у отмеченной платы: сначала поставьте галочку «Моё имя».")
-		return
-	}
-	if r.Kind == "avahi" {
-		status("Модель и SoC этой платы сообщает napi-avahi.")
-		return
-	}
-	endCell(false)
-	var rc [4]int32 // left, top (the subitem), right, bottom
-	rc[1] = int32(col)
-	send(hwndList, lvmGetSubItemRect, uintptr(i), uintptr(unsafe.Pointer(&rc)))
-	text := r.Model
-	if col == colSoC {
-		text = r.SoC
-	}
 	inst, _, _ := pGetModuleHandle.Call(0)
-	h, _, _ := pCreateWindowEx.Call(0, uintptr(unsafe.Pointer(u16("EDIT"))), uintptr(unsafe.Pointer(u16(text))),
-		wsChild|wsVisible|wsBorder|0x80, // ES_AUTOHSCROLL
-		uintptr(rc[0]), uintptr(rc[1]), uintptr(rc[2]-rc[0]), uintptr(rc[3]-rc[1]), hwndList, 0, inst, 0)
-	if h == 0 {
+	if !dlgClassOK {
+		cursor, _, _ := pLoadCursor.Call(0, 32512)
+		wc := wndClassEx{wndProc: dlgProcCB, instance: inst, cursor: cursor, brush: 16, className: u16("NapiDiscoverEdit")}
+		wc.size = uint32(unsafe.Sizeof(wc))
+		pRegisterClassEx.Call(uintptr(unsafe.Pointer(&wc)))
+		dlgClassOK = true
+	}
+	title := "Отметить плату " + r.ip
+	if r.Fixed != "" {
+		title = "Изменить «" + r.Fixed + "» " + r.ip
+	}
+	var mr [4]int32
+	pGetWindowRect.Call(hwndMain, uintptr(unsafe.Pointer(&mr)))
+	w, h := px(480), px(350)
+	x, y := int(mr[0])+(int(mr[2]-mr[0])-w)/2, int(mr[1])+px(70)
+	hwndDlg, _, _ = pCreateWindowEx.Call(0x1, // WS_EX_DLGMODALFRAME
+		uintptr(unsafe.Pointer(u16("NapiDiscoverEdit"))), uintptr(unsafe.Pointer(u16(title))),
+		0x80000000|0x00C00000|0x00080000, // WS_POPUP | WS_CAPTION | WS_SYSMENU
+		uintptr(x), uintptr(y), uintptr(w), uintptr(h), hwndMain, 0, inst, 0)
+	if hwndDlg == 0 {
 		return
 	}
-	cellEdit, cellRow, cellCol = h, i, col
-	send(h, wmSetFont, uiFont, 1)
-	send(h, 0x00B1, 0, ^uintptr(0)) // EM_SETSEL: all
-	pSetWindowSubclass.Call(h, cellProc, 1, 0)
-	pSetFocus.Call(h)
-	status("Модель или SoC: Enter сохраняет, Esc отменяет, пусто стирает.")
+	dlgRow = i
+	var cr [4]int32
+	user32.NewProc("GetClientRect").Call(hwndDlg, uintptr(unsafe.Pointer(&cr)))
+	cw := int(cr[2])
+	ctl := func(ex uintptr, class, text string, style uintptr, id, x, y, w, h int) uintptr {
+		c, _, _ := pCreateWindowEx.Call(ex, uintptr(unsafe.Pointer(u16(class))), uintptr(unsafe.Pointer(u16(text))),
+			wsChild|wsVisible|style, uintptr(x), uintptr(y), uintptr(w), uintptr(h), hwndDlg, uintptr(id), inst, 0)
+		send(c, wmSetFont, uiFont, 1)
+		return c
+	}
+	name := r.Fixed
+	if name == "" { // a suggestion: the network name without .local, else the IP
+		if name = strings.TrimSuffix(r.Name, ".local"); name == "" {
+			name = r.ip
+		}
+	}
+	m, lw, rh, gap := px(14), px(90), px(26), px(36)
+	for k, f := range []struct{ label, value string }{{"Моё имя", name}, {"Модель", r.Model}, {"SoC", r.SoC}, {"Роль", r.Role}, {"ОС", r.OS}} {
+		y := m + k*gap
+		ctl(0, "STATIC", f.label, 0, 0, m, y+px(4), lw, rh)
+		dlgFields[k] = ctl(wsExClientEdge, "EDIT", f.value, wsTabStop|0x80, 300+k, m+lw, y, cw-2*m-lw, rh) // ES_AUTOHSCROLL
+	}
+	note := "Ваше значение показывается вместо того, что сообщает плата; пустое поле: снова данные платы."
+	y = m + 5*gap
+	ctl(0, "STATIC", note, 0, 0, m, y, cw-2*m, px(36))
+	dlgErr = ctl(0, "STATIC", "", 0, 0, m, y+px(38), cw-2*m, px(20))
+	bw, bh := px(110), px(30)
+	by := int(cr[3]) - m - bh
+	ctl(0, "BUTTON", "Сохранить", wsTabStop|0x1, 1, cw-m-2*bw-px(10), by, bw, bh) // IDOK, BS_DEFPUSHBUTTON
+	ctl(0, "BUTTON", "Отмена", wsTabStop, 2, cw-m-bw, by, bw, bh)                 // IDCANCEL
+	pEnableWindow.Call(hwndMain, 0)
+	pShowWindow.Call(hwndDlg, 5)
+	user32.NewProc("SetForegroundWindow").Call(hwndDlg)
+	pSetFocus.Call(dlgFields[0])
+	send(dlgFields[0], 0x00B1, 0, ^uintptr(0)) // EM_SETSEL: all
 }
 
-// The edit box keys: Enter saves, Esc cancels, losing the focus saves.
-func cellSubclass(h, m, wp, lp, id, ref uintptr) uintptr {
+func dlgProc(hwnd, m, wp, lp uintptr) uintptr {
 	switch uint32(m) {
-	case 0x0087: // WM_GETDLGCODE: the keys are ours, not the dialog's
-		return 0x0004 // DLGC_WANTALLKEYS
-	case 0x0100: // WM_KEYDOWN
-		if wp == 0x0D || wp == 0x1B {
-			pPostMessage.Call(hwndMain, wmAppCell, b2u(wp == 0x0D), 0)
-			return 0
+	case wmCommand:
+		switch wp & 0xffff {
+		case 1: // IDOK: Enter, "Сохранить"
+			editSave()
+		case 2: // IDCANCEL: Esc, "Отмена"
+			editClose()
 		}
-	case 0x0102: // WM_CHAR: no beep for Enter and Esc
-		if wp == 0x0D || wp == 0x1B {
-			return 0
-		}
-	case 0x0008: // WM_KILLFOCUS
-		pPostMessage.Call(hwndMain, wmAppCell, 1, 0)
+		return 0
+	case 0x0010: // WM_CLOSE
+		editClose()
+		return 0
 	}
-	r, _, _ := pDefSubclassProc.Call(h, m, wp, lp)
+	r, _, _ := pDefWindowProc.Call(hwnd, m, wp, lp)
 	return r
 }
 
-func endCell(save bool) {
-	h := cellEdit
-	if h == 0 {
+func editSave() {
+	if dlgRow >= len(rows) {
+		editClose()
 		return
 	}
-	cellEdit = 0
-	buf := make([]uint16, 256)
-	pGetWindowText.Call(h, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
-	pDestroyWindow.Call(h)
+	var v [5]string
+	for k, h := range dlgFields {
+		buf := make([]uint16, 256)
+		pGetWindowText.Call(h, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+		v[k] = windows.UTF16ToString(buf)
+	}
+	r := rows[dlgRow]
+	if err := fixed.Edit(r.Row, fixed.Info{Name: v[0], Model: v[1], SoC: v[2], Role: v[3], OS: v[4]}); err != nil {
+		pSetWindowText.Call(dlgErr, uintptr(unsafe.Pointer(u16("Не сохранено: "+err.Error()))))
+		return
+	}
+	editClose()
+	msg := "«" + strings.TrimSpace(v[0]) + "» сохранена"
+	if r.Fixed == "" {
+		msg += ": отмечена, будет первой в списке"
+	}
+	status(msg)
+}
+
+// editClose: the main window back (before the dialog goes, so it gets the focus), the table again
+// (a checkbox ticked and then cancelled goes back off).
+func editClose() {
+	if hwndDlg == 0 {
+		return
+	}
+	pEnableWindow.Call(hwndMain, 1)
+	pDestroyWindow.Call(hwndDlg)
+	hwndDlg = 0
 	pSetFocus.Call(hwndList)
-	if !save || cellRow >= len(rows) {
-		status("")
-		return
-	}
-	field, what := "model", "Модель"
-	if cellCol == colSoC {
-		field, what = "soc", "SoC"
-	}
-	r := rows[cellRow]
-	if err := fixed.SetInfo(r.Row, field, windows.UTF16ToString(buf)); err != nil {
-		status(what + ": " + err.Error())
-		return
-	}
-	status(what + " «" + r.Fixed + "» сохранена")
-	refresh(r.ip)
+	pPostMessage.Call(hwndMain, wmAppRefresh, 0, 0)
 }
 
 // NM_CUSTOMDRAW of the list: the background of a row by its kind. NMLVCUSTOMDRAW on amd64:
@@ -801,11 +833,18 @@ func selected() *row {
 	return &rows[i]
 }
 
-// The web pages of a NAPI, a button each.
+// The web pages of a NAPI, a button each: napiconfig is https on 443.
 var webs = []struct {
 	name string
 	port int
-}{{"napiconfig", 8080}, {"influxdb", 8086}, {"grafana", 3000}, {"donoff", 8090}}
+}{{"napiconfig", 443}, {"influxdb", 8086}, {"grafana", 3000}, {"donoff", 8090}}
+
+func webURL(ip string, port int) string {
+	if port == 443 {
+		return "https://" + ip
+	}
+	return "http://" + ip + ":" + strconv.Itoa(port)
+}
 
 // A new console that asks the login, then ssh to the selected board (Windows Terminal when there is
 // one, else cmd; /k keeps the window with the error if ssh fails).
@@ -895,7 +934,7 @@ const helpText = `Поиск плат NAPI в сети, SSH и консоль UA
 
 «Искать»: платы с avahi: с сервисом napi-avahi (модель, SoC, роль) и с голым avahi в прошивке (проверяются по SSH, показываются только «NAPI?»). «Сырой поиск»: всё на порту 22, кроме Windows и MikroTik, для плат совсем без avahi; NAPI всегда сверху. «Консоль»: UART платы через USB-переходник, 1500000 8N1, выход Ctrl+]. napiconfig, SSH, influxdb, grafana, donoff: выбранная в таблице плата; двойной щелчок по строке: SSH, Ctrl+C: копировать IP. Зелёные строки: napi-avahi, жёлтые: «NAPI?» (голый avahi или сырой поиск).
 
-Галочка «Моё имя»: дайте плате своё имя. Отмеченные платы идут первыми, «Искать» проверяет их и без avahi; плата узнаётся по ключу SSH и MAC, даже если сменился IP или имя в сети. Не найденная плата остаётся серой строкой внизу. F2: переименовать. Модель и SoC отмеченной платы без napi-avahi: двойной щелчок по ячейке «Модель» или «SoC». Список хранится на этом компьютере: %APPDATA%\napi-discover\boards.json.
+Галочка «Моё имя»: дайте плате своё имя. Отмеченные платы идут первыми, «Искать» проверяет их и без avahi; плата узнаётся по ключу SSH и MAC, даже если сменился IP или имя в сети. Не найденная плата остаётся серой строкой внизу. ✎ у отмеченной платы (или F2): своё имя, модель, SoC, роль и ОС выбранной платы (ваше значение показывается вместо того, что сообщает плата; пустое поле: снова данные платы). Отмеченные платы показываются сразу при запуске: программа проверяет их по последнему IP и ключу SSH; «Искать» нужна для новых плат и для сменивших IP. Список хранится на этом компьютере: %APPDATA%\napi-discover\boards.json.
 
 Кнопка «Искать» находит плату, на которой работает avahi-daemon. Модель, SoC и роль в таблице даёт сервис napi-avahi:
     apt install napi-avahi
@@ -948,7 +987,7 @@ func open(i int) {
 		status("Выберите NAPI в таблице.")
 		return
 	}
-	url := "http://" + b.ip + ":" + strconv.Itoa(webs[i].port)
+	url := webURL(b.ip, webs[i].port)
 	pShellExecute.Call(hwndMain, uintptr(unsafe.Pointer(u16("open"))), uintptr(unsafe.Pointer(u16(url))), 0, 0, 1)
 	status("Открываю " + url)
 }
@@ -991,10 +1030,7 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 		}
 		return 0
 	case wmAppEdit:
-		editName(int(wp))
-		return 0
-	case wmAppCell:
-		endCell(wp == 1)
+		editOpen(int(wp))
 		return 0
 	case wmAppRefresh:
 		keep := ""
@@ -1006,13 +1042,13 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 	case wmCommand:
 		switch wp & 0xffff {
 		case idFind:
-			find(false)
+			find(modeAvahi)
 		case idSSH:
 			sshOpen()
 		case idCOM:
 			comMenu()
 		case idRaw:
-			find(true)
+			find(modeRaw)
 		case idAbout:
 			help()
 		case idLog:
@@ -1030,16 +1066,22 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 		}
 		switch h.code {
 		case nmDblClk: // NMITEMACTIVATE: iItem at 24, iSubItem at 28
-			i, col := int(*(*int32)(unsafe.Pointer(lp + 24))), int(*(*int32)(unsafe.Pointer(lp + 28)))
-			if (col == colModel || col == colSoC) && i >= 0 && i < len(rows) && rows[i].Fixed != "" {
-				editCell(i, col)
-			} else if selected() != nil {
+			if selected() != nil {
 				sshOpen()
+			}
+		case nmClick: // NMITEMACTIVATE: iItem 24, iSubItem 28, ptAction 44: ✎ at the start of the name
+			i, col, x := int(*(*int32)(unsafe.Pointer(lp + 24))), *(*int32)(unsafe.Pointer(lp + 28)), *(*int32)(unsafe.Pointer(lp + 44))
+			if col == 0 && i >= 0 && i < len(rows) && rows[i].Fixed != "" {
+				rc := [4]int32{2} // LVIR_LABEL: the text after the checkbox
+				send(hwndList, lvmGetItemRect, uintptr(i), uintptr(unsafe.Pointer(&rc)))
+				if x >= rc[0] && x < rc[0]+int32(px(22)) {
+					pPostMessage.Call(hwndMain, wmAppEdit, uintptr(i), 0)
+				}
 			}
 		case lvnKeyDown: // NMLVKEYDOWN: wVKey after the header
 			key := *(*uint16)(unsafe.Pointer(lp + unsafe.Sizeof(nmhdr{})))
-			if key == 0x71 { // F2: rename
-				editName(int(int32(send(hwndList, lvmGetNextItem, ^uintptr(0), lvniSelected))))
+			if key == 0x71 { // F2: "Изменить"
+				editOpen(int(int32(send(hwndList, lvmGetNextItem, ^uintptr(0), lvniSelected))))
 			}
 			if ctrl, _, _ := pGetKeyState.Call(0x11); key == 'C' && int16(ctrl) < 0 {
 				if b := selected(); b != nil && copyText(b.ip) {
@@ -1050,8 +1092,6 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 			return rowColor(lp)
 		case lvnItemChanged:
 			checkChanged(lp)
-		case lvnEndLabelEdit:
-			nameEdited(lp)
 		}
 		return 0
 	case wmDestroy:

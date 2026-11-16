@@ -14,7 +14,7 @@ SRC_URI = "git://github.com/lab240/napi-avahi.git;protocol=https;branch=main"
 # Development: follow the branch. For a release, pin a commit instead:
 #   SRCREV = "<commit>"
 SRCREV = "${AUTOREV}"
-PV = "0.1.5+git"
+PV = "0.1.6+git"
 
 S = "${WORKDIR}/git"
 

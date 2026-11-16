@@ -7,7 +7,7 @@ package napifind
 //         ROSSSH (MikroTik), OpenSSH_for_Windows are not NAPI
 //   mac   locally administered (Armbian derives it from the chip serial: d2:..., 06:..., 6a:...)
 //   name  the mDNS name by the IP (any avahi answers it, even without napi-avahi)
-//   ports the NAPI web pages and MQTT: 8080 napiconfig (shown by name), 8090 donoff, 8086 influxdb,
+//   ports the NAPI web pages and MQTT: 443 napiconfig (https, shown by name), 8090 donoff, 8086 influxdb,
 //         3000 grafana, 1883
 //   napi-avahi: the ordinary search runs alongside and marks the boards it found
 
@@ -35,7 +35,7 @@ type Host struct {
 	Signs   []string
 }
 
-var napiPorts = []int{8080, 8090, 8086, 3000, 1883}
+var napiPorts = []int{443, 8090, 8086, 3000, 1883}
 
 // Scan checks the own subnets; progress, when set, is called as the addresses are done
 // (from other goroutines).
@@ -234,7 +234,7 @@ func judge(h *Host) {
 		h.Signs = append(h.Signs, "имя")
 	}
 	for _, p := range h.Ports {
-		if p == 8080 { // 22 and 8080: napiconfig, the web setup of NAPI
+		if p == 443 { // 22 and 443: napiconfig (https), the web setup of NAPI
 			h.Signs = append(h.Signs, "napiconfig")
 		} else {
 			h.Signs = append(h.Signs, fmt.Sprint(":", p))

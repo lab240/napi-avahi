@@ -30,6 +30,8 @@ func Run(name string, args []string) int {
 	unfix := fs.String("unfix", "", "drop the mark: --unfix <IP or name>")
 	model := fs.String("model", "", "with --fix: the model of the board (no napi-avahi): --fix <IP> --model M <name>")
 	soc := fs.String("soc", "", "with --fix: the SoC of the board (no napi-avahi)")
+	role := fs.String("role", "", "with --fix: the role of the board (no napi-avahi)")
+	osName := fs.String("os", "", "with --fix: the OS of the board (instead of the SSH banner)")
 	fs.Bool("console", false, "napi-discover.exe: the console instead of the window")
 	fs.Bool("n", false, "ignored (old: do not wait for Enter)")
 	if fs.Parse(args) != nil {
@@ -47,10 +49,10 @@ func Run(name string, args []string) int {
 	if *fix != "" {
 		label := strings.Join(fs.Args(), " ")
 		if label == "" {
-			fmt.Fprintln(os.Stderr, "нужно имя: --fix <IP> [--model M] [--soc S] <имя>")
+			fmt.Fprintln(os.Stderr, "нужно имя: --fix <IP> [--model M] [--soc S] [--role R] [--os O] <имя>")
 			return 2
 		}
-		return doFix(*fix, label, *model, *soc)
+		return doFix(*fix, label, fixed.Info{Model: *model, SoC: *soc, Role: *role, OS: *osName})
 	}
 	found, err := fixed.Search(*raw, nil)
 	if err != nil && len(found) == 0 {
@@ -61,36 +63,33 @@ func Run(name string, args []string) int {
 	return 0
 }
 
-func doFix(ip, label, model, soc string) int {
+// doFix marks the board at ip; the fields given replace the ones of the mark, the rest stay.
+func doFix(ip, label string, in fixed.Info) int {
 	r := fixed.Row{Entry: -1, IP: ip}
 	if hs := napifind.Probe([]string{ip}); len(hs) > 0 {
 		r.Name, r.MAC = hs[0].Name, hs[0].MAC
 	}
 	r.Key = napifind.HostKeys([]string{ip})[ip]
 	if r.Key == "" && r.MAC == "" {
-		fmt.Fprintf(os.Stderr, "%s: нет ответа SSH и MAC (плата в другой подсети?), отметка будет только по IP\n", ip)
+		fmt.Fprintf(os.Stderr, "%s: нет ответа SSH и MAC, отметка будет только по IP\n", ip)
 	}
-	if err := fixed.SetName(r, label); err != nil {
+	es, _ := fixed.Load()
+	if idx, _ := fixed.Match(es, []fixed.Found{{IP: ip, MAC: r.MAC, Key: r.Key, Host: r.Name}}, time.Now()); idx[0] >= 0 {
+		e := es[idx[0]]
+		r.Entry, r.Fixed = idx[0], e.Name
+		for _, f := range []struct {
+			to  *string
+			was string
+		}{{&in.Model, e.Model}, {&in.SoC, e.SoC}, {&in.Role, e.Role}, {&in.OS, e.OS}} {
+			if *f.to == "" {
+				*f.to = f.was
+			}
+		}
+	}
+	in.Name = label
+	if err := fixed.Edit(r, in); err != nil {
 		fmt.Fprintln(os.Stderr, "ошибка:", err)
 		return 1
-	}
-	if model != "" || soc != "" {
-		es, _ := fixed.Load()
-		for i, e := range es {
-			if e.Name != label {
-				continue
-			}
-			for f, v := range map[string]string{"model": model, "soc": soc} {
-				if v == "" {
-					continue
-				}
-				if err := fixed.SetInfo(fixed.Row{Entry: i, Fixed: label}, f, v); err != nil {
-					fmt.Fprintln(os.Stderr, "ошибка:", err)
-					return 1
-				}
-			}
-			break
-		}
 	}
 	fmt.Printf("%s отмечена как «%s» (%s)\n", ip, label, fixed.Path())
 	return 0
