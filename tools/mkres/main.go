@@ -2,7 +2,7 @@
 // links in: the icon (group 1), the version info (napilab, the version) and the manifest
 // (common controls 6, DPI aware, asInvoker). No tools outside Go.
 //
-//	go run ./tools/mkres -ico assets/napi.ico -version 0.1.4 -o cmd/napi-discover/rsrc_windows_amd64.syso
+//	go run ./tools/mkres -ico assets/napi.ico -version 0.1.5 -o cmd/napi-discover/rsrc_windows_amd64.syso
 package main
 
 import (

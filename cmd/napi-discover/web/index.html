@@ -177,7 +177,7 @@ async function setInfo(i, field, what) {
   const r = rows[i], v = prompt(`${what} «${r.Fixed}» (пусто: стереть):`, (field === "model" ? r.Model : r.SoC) || "");
   if (v === null) return;
   try {
-    await api(`info?i=${i}&field=${field}&value=${encodeURIComponent(v.trim())}`, true);
+    await api(`setinfo?i=${i}&field=${field}&value=${encodeURIComponent(v.trim())}`, true);
     const s = await api("state");
     rows = s.rows || []; render(); status(`${what} «${r.Fixed}» сохранена`);
   } catch (e) { status(what + ": " + e.message); }

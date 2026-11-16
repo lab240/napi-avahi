@@ -162,7 +162,7 @@ func serve() error {
 		st.Rows = fixed.Annotate(st.found)
 	})
 	// the model or the SoC of a marked row i, for a board without napi-avahi
-	api("info", true, func(w http.ResponseWriter, r *http.Request) {
+	api("setinfo", true, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		i, err := strconv.Atoi(q.Get("i"))
 		mu.Lock()

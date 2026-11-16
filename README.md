@@ -44,7 +44,7 @@ apt update && apt install napi-avahi
 Архив `napi-avahi-<версия>.tar.gz` (`make tar`): скопировать на плату и под root
 
 ```sh
-tar xzf napi-avahi-0.1.4.tar.gz && cd napi-avahi-0.1.4 && sh install.sh
+tar xzf napi-avahi-0.1.5.tar.gz && cd napi-avahi-0.1.5 && sh install.sh
 ```
 
 В образе должен быть `avahi-daemon` (`avahi-utils` желателен: без него новое имя применяется
